@@ -19,3 +19,10 @@ def test_proper_nouns_round_trip():
     protected, originals = protect(text, ["Hatsune Miku"], "en", True, False)
     assert "Hatsune" not in protected
     assert restore(protected, originals) == text
+
+
+def test_needed_pairs_pivot_through_english():
+    from screen_translator.translator import needed_pairs
+    assert needed_pairs("en", "zh-TW") == [("en", "zt")]
+    assert needed_pairs("ja", "zh-TW") == [("ja", "en"), ("en", "zt")]
+    assert needed_pairs("en", "en") == []

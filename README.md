@@ -1,5 +1,7 @@
 # Screen Translator
 
+**English** | [繁體中文](README.zh-TW.md)
+
 A free, fully offline screen translator for Windows. It reads the text on your screen with the built-in
 Windows OCR, translates it locally with [Argos Translate](https://github.com/argosopentech/argos-translate),
 and draws the translation in a click-through overlay directly **above** each text block, centred on it.
@@ -7,7 +9,8 @@ Nothing is sent over the network and your normal use of the computer is not dist
 
 ## Features
 
-- Pick the screen language and the target language in the settings window.
+- Pick the screen language and the target language in the settings window. Missing offline language
+  packs are offered for download right when you pick a language (you confirm first).
 - Proper nouns are never translated: a do-not-translate list plus automatic detection
   (capitalised mid-sentence words, ALL CAPS, CamelCase, optional katakana).
 - Wrapped lines are merged into sentences (split on `. ! ?`), so paragraphs are translated as a whole.
@@ -23,7 +26,12 @@ Nothing is sent over the network and your normal use of the computer is not dist
 - Python 3.10 - 3.12
 - Windows OCR language pack for the screen language (Settings > Time & language > Language & region)
 
-## Install and run
+## Download
+
+Grab the ready-made `ScreenTranslator-windows.zip` from the [Releases](../../releases) page, unzip it and run
+`ScreenTranslator.exe`.
+
+## Install and run from source
 
 ```bat
 python -m venv .venv
@@ -32,7 +40,7 @@ python -m venv .venv
 run.bat
 ```
 
-Argos language packs are downloaded once (about 50-100 MB each) and then work offline.
+The app also asks to download missing packs when you choose a language. Argos language packs are downloaded once (about 50-100 MB each) and then work offline.
 Pairs that do not involve English go through English, so `ja>zt` needs `ja>en` and `en>zt`.
 Argos codes: `zh` = Simplified Chinese, `zt` = Traditional Chinese.
 

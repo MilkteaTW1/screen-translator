@@ -59,6 +59,29 @@ def argos_pairs(installed_codes):
     return pairs
 
 
+def needed_pairs(src, dst):
+    """Argos packs a translation needs: every pack goes via English."""
+    a, b = argos_code(src), argos_code(dst)
+    if a == b or a == "auto":
+        return []
+    return [(a, b)] if "en" in (a, b) else [(a, "en"), ("en", b)]
+
+
+def missing_pairs(src, dst):
+    return [p for p in needed_pairs(src, dst) if p not in argos_pairs(argos_installed())]
+
+
+def install_pack(from_code, to_code):
+    """Download and install one Argos pack (needs internet, roughly 50-100 MB). Raises on failure."""
+    import argostranslate.package as package
+    package.update_package_index()
+    match = next((p for p in package.get_available_packages()
+                  if p.from_code == from_code and p.to_code == to_code), None)
+    if match is None:
+        raise RuntimeError(f"no such language pack: {from_code}>{to_code}")
+    package.install_from_path(match.download())
+
+
 URLISH_RE = re.compile(r"https?:|www\.|\.(com|org|net|io|tw|edu|gov|co)\b|[/\\@]|\w_\w", re.IGNORECASE)
 
 
@@ -180,9 +203,7 @@ class Translator:
     def _argos(self, protected, src, dst):
         """Translate offline. Returns None (and records what's missing) if packs aren't installed."""
         a, b = argos_code(src), argos_code(dst)
-        have = argos_installed()
-        needed = [(x, y) for x, y in ((a, "en"), ("en", b)) if x != y] if "en" not in (a, b) else [(a, b)]
-        missing = [p for p in needed if p not in argos_pairs(have)]
+        missing = missing_pairs(src, dst)
         if a == "auto" or missing:
             self.missing_packs.update(missing)
             return None

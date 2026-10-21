@@ -1,23 +1,24 @@
-"""Download Argos offline language packs. Usage: python download_packs.py ja>en en>zt
-Each pack is roughly 50-100 MB. Argos codes: zh = Simplified Chinese, zt = Traditional Chinese."""
+"""Download Argos offline language packs. Usage: python scripts/download_packs.py ja>en en>zt
+Each pack is roughly 50-100 MB. Argos codes: zh = Simplified Chinese, zt = Traditional Chinese.
+(The app also offers to download missing packs when you pick a language.)"""
 import sys
+from pathlib import Path
 
-import argostranslate.package as package
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+
+from screen_translator.translator import install_pack  # noqa: E402
 
 
 def main(pairs):
-    package.update_package_index()
-    available = package.get_available_packages()
     for pair in pairs:
         src, dst = pair.split(">")
-        match = next((p for p in available if p.from_code == src and p.to_code == dst), None)
-        if match is None:
-            print(f"{pair}: no such pack")
-            continue
         print(f"{pair}: downloading...")
-        package.install_from_path(match.download())
-        print(f"{pair}: installed")
+        try:
+            install_pack(src, dst)
+            print(f"{pair}: installed")
+        except Exception as e:
+            print(f"{pair}: {e}")
 
 
 if __name__ == "__main__":
-    main(sys.argv[1:] or ["--help"])
+    main(sys.argv[1:])

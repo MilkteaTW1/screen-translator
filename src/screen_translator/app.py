@@ -14,13 +14,15 @@ import numpy as np
 from PySide6.QtCore import QObject, Qt, Signal
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
-    QApplication, QCheckBox, QComboBox, QDoubleSpinBox, QFormLayout, QLabel, QMenu,
+    QApplication, QCheckBox, QComboBox, QDoubleSpinBox, QFormLayout, QLabel, QMenu, QMessageBox,
     QPlainTextEdit, QPushButton, QSystemTrayIcon, QVBoxLayout, QWidget,
 )
 
 from . import ocr
 from .overlay import Overlay
-from .translator import LANGUAGES, Translator, looks_like_source, ocr_tag_to_code
+from .translator import (
+    LANGUAGES, Translator, install_pack, looks_like_source, missing_pairs, ocr_tag_to_code,
+)
 
 SETTINGS_PATH = Path(os.environ.get("APPDATA", Path.home())) / "ScreenTranslator" / "settings.json"
 DEFAULTS = {
@@ -213,9 +215,14 @@ class Worker(QObject):
 
 
 class Panel(QWidget):
+    pack_status = Signal(str)
+    pack_finished = Signal()
+
     def __init__(self, worker, overlay, langs):
         super().__init__()
         self.worker, self.overlay = worker, overlay
+        self.langs = langs
+        self.downloading = False
         self.setWindowTitle("Screen Translator")
         self.setMinimumWidth(380)
         s = worker.settings
@@ -266,6 +273,9 @@ class Panel(QWidget):
 
         for w in (self.source, self.target):
             w.currentIndexChanged.connect(self.apply)
+            w.currentIndexChanged.connect(self.ensure_packs)
+        self.pack_status.connect(self.state.setText)
+        self.pack_finished.connect(self._packs_ready)
         self.interval.valueChanged.connect(self.apply)
         self.hide_capture.toggled.connect(self.apply)
         self.skip_names.toggled.connect(self.apply)
@@ -301,6 +311,40 @@ class Panel(QWidget):
         SETTINGS_PATH.write_text(json.dumps(s, ensure_ascii=False, indent=2), encoding="utf-8")
         self.worker.configure(s)
 
+    def ensure_packs(self, *_):
+        """Offer to download the offline language packs the chosen pair needs."""
+        s = self.current()
+        src = ocr_tag_to_code(s["source"], set(self.langs.values()))
+        missing = missing_pairs(src, s["target"])
+        if not missing or self.downloading:
+            return
+        names = ", ".join(f"{a} → {b}" for a, b in missing)
+        answer = QMessageBox.question(
+            self, "Download language packs",
+            f"Translating this pair offline needs: {names}\n"
+            f"Each pack is roughly 50-100 MB and is downloaded once. Download now?")
+        if answer != QMessageBox.Yes:
+            self.state.setText(f"Offline packs needed: {names}")
+            return
+        self.downloading = True
+        threading.Thread(target=self._download, args=(missing,), daemon=True).start()
+
+    def _download(self, pairs):
+        try:
+            for a, b in pairs:
+                self.pack_status.emit(f"Downloading language pack {a} → {b} ...")
+                install_pack(a, b)
+            self.pack_status.emit("Language packs installed")
+        except Exception as e:
+            self.pack_status.emit(f"Download failed: {e}")
+        self.pack_finished.emit()
+
+    def _packs_ready(self):
+        self.downloading = False
+        self.worker.translator.missing_packs.clear()
+        self.worker.translator.clear()
+        self.worker.dirty = True
+
     def on_toggle(self):
         if self.worker.running:
             self.worker.stop()
@@ -308,6 +352,7 @@ class Panel(QWidget):
             self.state.setText("Stopped")
         else:
             self.apply()
+            self.ensure_packs()
             self.worker.start()
             self.toggle.setText("Stop")
             self.state.setText("Starting...")
