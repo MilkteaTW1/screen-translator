@@ -9,3 +9,7 @@
 - No global hotkeys (start/stop, toggle screenshots).
 - The PyInstaller build is untested on clean machines; bundling Argos packs is not handled.
 - No CI; a GitHub Actions workflow running `pytest` on Windows would help.
+- Android: the screen is read through screen capture, so our own overlay is visible to OCR (guarded by a text
+  similarity check); no auto-start at boot (Android needs a fresh capture consent each time).
+- Android: Traditional Chinese is a Simplified-to-Traditional character conversion, so mainland vocabulary remains.
+- Android: only arm64 and x86_64 APKs are built; no iOS version.

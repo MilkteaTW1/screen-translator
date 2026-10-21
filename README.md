@@ -36,6 +36,21 @@ Download `ScreenTranslator-Setup-x.y.z.exe` from the [Releases](../../releases) 
 rights needed; an optional task starts it with Windows). Language packs are **not** bundled: the app asks before
 downloading each one (50-100 MB), or you can import `.argosmodel` files you already have.
 
+## Android
+
+Download `ScreenTranslator-x.y.z-arm64.apk` from the [Releases](../../releases) page (about 32 MB, Android 8+).
+It uses Google ML Kit on the phone: on-device OCR and translation, no account. Translation language data
+(about 30 MB per language) is downloaded only after you choose how: Wi-Fi only, any network, or not now.
+Chinese/Japanese/Korean text recognition models are fetched by Google Play services the first time they are used.
+
+1. Pick the screen language and the language to translate to, press **Start**.
+2. Allow *Display over other apps*, then press Start again, and allow screen capture.
+3. In the capture dialog choose **Share entire screen** (not "one app"). A notification lets you stop it.
+
+The translation is drawn above each text block, centred, and proper nouns are left alone. The source is in
+[`android/`](android) (Kotlin; build with Gradle and JDK 17). The APK is signed with the debug key, so it installs by
+sideloading; Traditional Chinese output converts ML Kit's Simplified Chinese with ICU.
+
 ## Install and run from source
 
 ```bat
@@ -112,6 +127,19 @@ MIT
 到 [Releases](../../releases) 下載 `ScreenTranslator-Setup-x.y.z.exe` 並執行(約 70 MB,不需要系統管理員權限,
 可勾選開機自動啟動)。語言包不包含在安裝檔裡:選語言時程式會先詢問再下載(每個 50~100 MB),
 也可以匯入你已經有的 `.argosmodel` 檔。
+
+## Android 手機版
+
+到 [Releases](../../releases) 下載 `ScreenTranslator-x.y.z-arm64.apk`(約 32 MB,Android 8 以上)。
+使用 Google ML Kit 在手機本機做 OCR 與翻譯,不需要帳號。翻譯語言資料(每個語言約 30 MB)
+會先問你要怎麼下載(僅 Wi-Fi、任何網路、或暫不下載)才會下載;中日韓文字辨識模型由 Google Play 服務在第一次使用時下載。
+
+1. 選螢幕語言與要翻譯成的語言,按 **Start**。
+2. 允許「顯示在其他應用程式上層」,再按一次 Start,並允許螢幕擷取。
+3. 擷取視窗請選 **分享整個螢幕**(不要選「單一應用程式」)。通知欄可以隨時停止。
+
+譯文會顯示在每個文字區塊正上方並置中,專有名詞不翻譯。原始碼在 [`android/`](android)(Kotlin,用 Gradle 與 JDK 17 建置)。
+APK 以 debug 金鑰簽署,可直接側載安裝;繁體中文是把 ML Kit 的簡體輸出用 ICU 轉換而來。
 
 ## 從原始碼執行
 
