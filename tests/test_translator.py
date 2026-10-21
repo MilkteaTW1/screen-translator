@@ -26,3 +26,20 @@ def test_needed_pairs_pivot_through_english():
     assert needed_pairs("en", "zh-TW") == [("en", "zt")]
     assert needed_pairs("ja", "zh-TW") == [("ja", "en"), ("en", "zt")]
     assert needed_pairs("en", "en") == []
+
+
+def test_llm_engine_is_used_and_falls_back(monkeypatch):
+    from screen_translator import translator as t
+    tr = t.Translator()
+    tr.llm = ("http://x/v1", "m")
+    monkeypatch.setattr(t, "llm_translate", lambda text, *a: "你好，世界。")
+    assert tr.translate("Hello there, world.", "en", "zh-TW", "en-US", [], True, False) == "你好，世界。"
+    assert tr.engine == "llm"
+    tr.clear()
+
+    def down(*a):
+        raise OSError("refused")
+    monkeypatch.setattr(t, "llm_translate", down)
+    monkeypatch.setattr(tr, "_argos", lambda *a: "離線翻譯。")
+    assert tr.translate("Hello there, world.", "en", "zh-TW", "en-US", [], True, False) == "離線翻譯。"
+    assert tr.engine == "offline"

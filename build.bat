@@ -1,9 +1,14 @@
 @echo off
-rem Builds dist\ScreenTranslator with PyInstaller (run inside the project venv).
+rem Builds the lean PyInstaller folder (run inside the project venv). Use a SHORT output path:
+rem Windows path limits break the build in deep folders.
 cd /d "%~dp0"
+if "%OUT%"=="" set OUT=%~dp0dist
 pyinstaller --noconfirm --windowed --name ScreenTranslator --paths src ^
-  --collect-all argostranslate --collect-all stanza --collect-all ctranslate2 --collect-all sentencepiece ^
+  --distpath "%OUT%" --workpath "%OUT%\work" --specpath "%OUT%" ^
+  --collect-all ctranslate2 --collect-all sentencepiece ^
+  --exclude-module torch --exclude-module spacy --exclude-module stanza --exclude-module argostranslate ^
+  --exclude-module onnxruntime --exclude-module matplotlib --exclude-module tkinter ^
   --exclude-module PySide6.QtWebEngineCore --exclude-module PySide6.QtWebEngineWidgets ^
   --exclude-module PySide6.QtPdf --exclude-module PySide6.QtQuick --exclude-module PySide6.QtQml ^
-  --exclude-module matplotlib --exclude-module tkinter ^
   scripts\launch.py
+rem Setup installer (needs Inno Setup 6):  ISCC /DSourceDir=%OUT%\ScreenTranslator installer\ScreenTranslator.iss

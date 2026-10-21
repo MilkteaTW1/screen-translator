@@ -1,5 +1,6 @@
 """Screen Translator: pick source/target language, translate on-screen text in place, keep proper nouns."""
 import ctypes
+import winreg
 import difflib
 import json
 import os
@@ -14,14 +15,15 @@ import numpy as np
 from PySide6.QtCore import QObject, Qt, Signal
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
-    QApplication, QCheckBox, QComboBox, QDoubleSpinBox, QFormLayout, QLabel, QMenu, QMessageBox,
+    QApplication, QCheckBox, QFileDialog, QComboBox, QDoubleSpinBox, QFormLayout, QLabel, QLineEdit, QMenu, QMessageBox,
     QPlainTextEdit, QPushButton, QSystemTrayIcon, QVBoxLayout, QWidget,
 )
 
 from . import ocr
 from .overlay import Overlay
+from . import packs
 from .translator import (
-    LANGUAGES, Translator, install_pack, looks_like_source, missing_pairs, ocr_tag_to_code,
+    LANGUAGES, Translator, install_pack, looks_like_source, missing_pairs, needed_pairs, ocr_tag_to_code,
 )
 
 SETTINGS_PATH = Path(os.environ.get("APPDATA", Path.home())) / "ScreenTranslator" / "settings.json"
@@ -29,9 +31,36 @@ DEFAULTS = {
     "source": "en-US", "target": "zh-TW", "interval": 1.0,
     "auto_proper": True, "keep_katakana": False, "glossary": "",
     "hide_from_capture": True, "skip_names": True,
+    "autostart": False, "start_on_launch": False,
+    "llm_enabled": False, "llm_url": "http://localhost:11434/v1", "llm_model": "qwen2.5:7b",
 }
 MAX_BLOCKS = 40  # most text blocks translated per screen pass
 BATCH = 5  # blocks translated between overlay refreshes
+
+
+RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
+
+
+def set_autostart(on):
+    """Start with Windows (current user, no admin rights): a value under the Run registry key."""
+    exe = sys.executable if getattr(sys, "frozen", False) else f'"{sys.executable}" -m screen_translator'
+    cmd = f'"{exe}" --minimized' if getattr(sys, "frozen", False) else f"{exe} --minimized"
+    with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY, 0, winreg.KEY_SET_VALUE) as k:
+        if on:
+            winreg.SetValueEx(k, "ScreenTranslator", 0, winreg.REG_SZ, cmd)
+        else:
+            try:
+                winreg.DeleteValue(k, "ScreenTranslator")
+            except FileNotFoundError:
+                pass
+
+
+def lower_priority():
+    """Run below normal priority so translating never competes with what the user is doing."""
+    try:
+        ctypes.windll.kernel32.SetPriorityClass(ctypes.windll.kernel32.GetCurrentProcess(), 0x4000)
+    except Exception:
+        pass
 
 
 def _iou(a, b):
@@ -59,6 +88,7 @@ class Worker(QObject):
         self.langs = langs  # display name -> language code
         self.settings = load_settings()
         self.translator = Translator()
+        self._use_llm(self.settings)
         self.running = False
         self.dirty = True
         self.thread = None
@@ -69,9 +99,13 @@ class Worker(QObject):
 
     def configure(self, settings):
         self.settings = settings
+        self._use_llm(settings)
         self.tracks = []
         self.translator.clear()
         self.dirty = True
+
+    def _use_llm(self, s):
+        self.translator.llm = (s["llm_url"], s["llm_model"]) if s["llm_enabled"] else None
 
     def start(self):
         if self.running:
@@ -118,7 +152,7 @@ class Worker(QObject):
         if t.missing_packs:
             need = ", ".join(f"{a}→{b}" for a, b in sorted(t.missing_packs))
             return f"Offline packs needed: {need} (run scripts/download_packs.py)"
-        return "Running (offline)"
+        return "Running (local LLM)" if t.engine == "llm" else "Running (offline)"
 
     def _process(self, recognizer, shot, s, pool):
         glossary = [t.strip() for t in s["glossary"].splitlines() if t.strip()]
@@ -250,6 +284,14 @@ class Panel(QWidget):
         self.hide_capture.setChecked(s["hide_from_capture"])
         self.skip_names = QCheckBox("Skip names and one-word labels (e.g. Bill Gates, Premium)")
         self.skip_names.setChecked(s["skip_names"])
+        self.autostart = QCheckBox("Start with Windows (in the tray)")
+        self.autostart.setChecked(s["autostart"])
+        self.start_on_launch = QCheckBox("Start translating as soon as the app opens")
+        self.start_on_launch.setChecked(s["start_on_launch"])
+        self.llm = QCheckBox("Better quality: use a local LLM server (Ollama / LM Studio)")
+        self.llm.setChecked(s["llm_enabled"])
+        self.llm_url = QLineEdit(s["llm_url"])
+        self.llm_model = QLineEdit(s["llm_model"])
         self.glossary = QPlainTextEdit(s["glossary"])
         self.glossary.setPlaceholderText("Never translate these (one per line)\ne.g. Hatsune Miku\nNVIDIA")
         self.toggle = QPushButton("Start")
@@ -266,6 +308,13 @@ class Panel(QWidget):
         lay.addWidget(self.skip_names)
         lay.addWidget(self.auto)
         lay.addWidget(self.kata)
+        lay.addWidget(self.autostart)
+        lay.addWidget(self.start_on_launch)
+        lay.addWidget(self.llm)
+        llm_form = QFormLayout()
+        llm_form.addRow("Server URL", self.llm_url)
+        llm_form.addRow("Model", self.llm_model)
+        lay.addLayout(llm_form)
         lay.addWidget(QLabel("Do-not-translate list"))
         lay.addWidget(self.glossary)
         lay.addWidget(self.toggle)
@@ -282,6 +331,11 @@ class Panel(QWidget):
         self.auto.toggled.connect(self.apply)
         self.kata.toggled.connect(self.apply)
         self.glossary.textChanged.connect(self.apply)
+        self.llm.toggled.connect(self.apply)
+        self.autostart.toggled.connect(self.apply)
+        self.start_on_launch.toggled.connect(self.apply)
+        self.llm_url.editingFinished.connect(self.apply)
+        self.llm_model.editingFinished.connect(self.apply)
         worker.status.connect(self.state.setText)
         worker.results.connect(overlay.set_items)
 
@@ -301,7 +355,9 @@ class Panel(QWidget):
             "interval": self.interval.value(), "auto_proper": self.auto.isChecked(),
             "keep_katakana": self.kata.isChecked(), "glossary": self.glossary.toPlainText(),
             "hide_from_capture": self.hide_capture.isChecked(),
-            "skip_names": self.skip_names.isChecked(),
+            "skip_names": self.skip_names.isChecked(), "llm_enabled": self.llm.isChecked(),
+            "autostart": self.autostart.isChecked(), "start_on_launch": self.start_on_launch.isChecked(),
+            "llm_url": self.llm_url.text().strip(), "llm_model": self.llm_model.text().strip(),
         }
 
     def apply(self, *_):
@@ -310,6 +366,10 @@ class Panel(QWidget):
         self.overlay.set_capture_hidden(s["hide_from_capture"])
         SETTINGS_PATH.write_text(json.dumps(s, ensure_ascii=False, indent=2), encoding="utf-8")
         self.worker.configure(s)
+        try:
+            set_autostart(s["autostart"])
+        except OSError:
+            pass
 
     def ensure_packs(self, *_):
         """Offer to download the offline language packs the chosen pair needs."""
@@ -319,11 +379,21 @@ class Panel(QWidget):
         if not missing or self.downloading:
             return
         names = ", ".join(f"{a} → {b}" for a, b in missing)
-        answer = QMessageBox.question(
-            self, "Download language packs",
-            f"Translating this pair offline needs: {names}\n"
-            f"Each pack is roughly 50-100 MB and is downloaded once. Download now?")
-        if answer != QMessageBox.Yes:
+        box = QMessageBox(self)
+        box.setWindowTitle("Language packs")
+        box.setText(f"Translating this pair offline needs: {names}\n"
+                    "Each pack is a one-time download of about 50-100 MB. How do you want to get it?")
+        download = box.addButton("Download now", QMessageBox.AcceptRole)
+        have_file = box.addButton("I have the file...", QMessageBox.ActionRole)
+        box.addButton("Not now", QMessageBox.RejectRole)
+        box.exec()
+        if box.clickedButton() is have_file:
+            for path in QFileDialog.getOpenFileNames(self, "Pick .argosmodel file(s)", "", "Argos packs (*.argosmodel)")[0]:
+                packs.import_file(path)
+            self._packs_ready()
+            self.state.setText("Language packs imported")
+            return
+        if box.clickedButton() is not download:
             self.state.setText(f"Offline packs needed: {names}")
             return
         self.downloading = True
@@ -333,7 +403,7 @@ class Panel(QWidget):
         try:
             for a, b in pairs:
                 self.pack_status.emit(f"Downloading language pack {a} → {b} ...")
-                install_pack(a, b)
+                install_pack(a, b, lambda pct, a=a, b=b: self.pack_status.emit(f"Downloading {a} → {b}: {pct}%"))
             self.pack_status.emit("Language packs installed")
         except Exception as e:
             self.pack_status.emit(f"Download failed: {e}")
@@ -367,7 +437,19 @@ class Panel(QWidget):
         QApplication.quit()
 
 
+def prewarm(worker):
+    """Load the translation model in the background so the first translation is instant."""
+    try:
+        s = worker.settings
+        for pair in needed_pairs(ocr_tag_to_code(s["source"], set(LANGUAGES.values())), s["target"]):
+            if pair in packs.installed_pairs():
+                packs._load(pair)
+    except Exception:
+        pass
+
+
 def main():
+    lower_priority()
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)
     langs = LANGUAGES
@@ -376,7 +458,12 @@ def main():
     worker = Worker(langs)
     overlay.set_capture_hidden(worker.settings["hide_from_capture"])
     panel = Panel(worker, overlay, langs)
-    panel.show()
+    minimized = "--minimized" in sys.argv
+    if not minimized:
+        panel.show()
+    if worker.settings["start_on_launch"]:
+        panel.on_toggle()
+    threading.Thread(target=prewarm, args=(worker,), daemon=True).start()
 
     tray = QSystemTrayIcon(app.style().standardIcon(app.style().StandardPixmap.SP_ComputerIcon), app)
     menu = QMenu()

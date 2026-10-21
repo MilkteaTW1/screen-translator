@@ -14,7 +14,7 @@ class _Overlay:
 def test_declining_the_download_starts_nothing(monkeypatch, tmp_path):
     qapp = QApplication.instance() or QApplication([])
     monkeypatch.setattr(appmod, "missing_pairs", lambda s, d: [("en", "zt")])
-    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.No)
+    monkeypatch.setattr(QMessageBox, "exec", lambda self: 0)  # the user picks nothing: "Not now"
     monkeypatch.setattr(appmod, "SETTINGS_PATH", tmp_path / "settings.json")
     started = []
     monkeypatch.setattr(appmod.threading, "Thread", lambda **k: started.append(k))

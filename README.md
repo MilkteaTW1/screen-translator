@@ -18,6 +18,10 @@ Nothing is sent over the network and your normal use of the computer is not dist
   and the translation box is placed only from its own block (never re-chosen from its surroundings).
 - The overlay and settings window are excluded from screen capture, so the app never re-translates itself
   (a tray option lets screenshots include translations).
+- Light on resources: runs at below-normal priority, 2 translation threads, no torch/spacy; starts in about a second
+  and can start with Windows, minimised to the tray, translating right away.
+- Optional better quality: point it at a local LLM server (Ollama, LM Studio...) in the settings; falls back to
+  the built-in model when the server is not running.
 - Configurable refresh interval (0 s and up; the real limit is OCR speed).
 
 ## Requirements
@@ -28,8 +32,9 @@ Nothing is sent over the network and your normal use of the computer is not dist
 
 ## Download
 
-Grab the ready-made `ScreenTranslator-windows.zip` from the [Releases](../../releases) page, unzip it and run
-`ScreenTranslator.exe`.
+Download `ScreenTranslator-Setup-x.y.z.exe` from the [Releases](../../releases) page and run it (about 70 MB, no admin
+rights needed; an optional task starts it with Windows). Language packs are **not** bundled: the app asks before
+downloading each one (50-100 MB), or you can import `.argosmodel` files you already have.
 
 ## Install and run from source
 
@@ -91,6 +96,9 @@ MIT
 - 畫面穩定:文字區塊要連續看到兩次才顯示,已追蹤的區塊會固定位置,
   譯文位置只由自己的區塊決定,不會在上下左右之間跳來跳去。
 - 覆蓋層與設定視窗不會被截圖拍到,所以不會翻譯到自己的譯文(托盤選單可改成讓截圖包含譯文)。
+- 低資源:以低優先權執行、翻譯只用 2 個執行緒、不含 torch/spacy,約一秒啟動,
+  可開機自動啟動並縮小到系統匣、啟動即開始翻譯。
+- 可選的更高品質:在設定中指定本機 LLM 伺服器(Ollama、LM Studio 等),伺服器沒開時自動退回內建模型。
 - 可自訂刷新間隔(0 秒起,實際速度受 OCR 速度限制)。
 
 ## 系統需求
@@ -101,7 +109,9 @@ MIT
 
 ## 下載
 
-到 [Releases](../../releases) 下載 `ScreenTranslator-windows.zip`,解壓縮後執行 `ScreenTranslator.exe`。
+到 [Releases](../../releases) 下載 `ScreenTranslator-Setup-x.y.z.exe` 並執行(約 70 MB,不需要系統管理員權限,
+可勾選開機自動啟動)。語言包不包含在安裝檔裡:選語言時程式會先詢問再下載(每個 50~100 MB),
+也可以匯入你已經有的 `.argosmodel` 檔。
 
 ## 從原始碼執行
 

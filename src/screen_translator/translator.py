@@ -1,5 +1,9 @@
-"""Offline translation (Argos Translate) with proper-noun protection."""
+"""Offline translation (Argos Translate, or a local LLM server) with proper-noun protection."""
+import json
 import re
+import urllib.request
+
+from . import packs
 
 # Target languages offered in the UI: display name -> code (zh-TW / zh-CN are mapped to Argos zt / zh).
 LANGUAGES = {
@@ -43,20 +47,9 @@ def argos_code(code):
     return {"zh-CN": "zh", "zh-TW": "zt"}.get(code, code.split("-")[0])
 
 
-def argos_installed():
-    try:
-        import argostranslate.translate as at
-        return {l.code for l in at.get_installed_languages()}
-    except Exception:
-        return set()
-
-
-def argos_pairs(installed_codes):
-    """Direct (from, to) pairs implied by the installed language codes (every pack goes via English)."""
-    pairs = set()
-    for c in installed_codes - {"en"}:
-        pairs |= {(c, "en"), ("en", c)}
-    return pairs
+def argos_pairs(*_):
+    """Direct (from, to) packs installed on this machine."""
+    return set(packs.installed_pairs())
 
 
 def needed_pairs(src, dst):
@@ -68,18 +61,12 @@ def needed_pairs(src, dst):
 
 
 def missing_pairs(src, dst):
-    return [p for p in needed_pairs(src, dst) if p not in argos_pairs(argos_installed())]
+    return [p for p in needed_pairs(src, dst) if p not in argos_pairs()]
 
 
-def install_pack(from_code, to_code):
-    """Download and install one Argos pack (needs internet, roughly 50-100 MB). Raises on failure."""
-    import argostranslate.package as package
-    package.update_package_index()
-    match = next((p for p in package.get_available_packages()
-                  if p.from_code == from_code and p.to_code == to_code), None)
-    if match is None:
-        raise RuntimeError(f"no such language pack: {from_code}>{to_code}")
-    package.install_from_path(match.download())
+def install_pack(from_code, to_code, progress=None):
+    """Download and install one language pack (needs internet). Raises on failure."""
+    packs.install(from_code, to_code, progress)
 
 
 URLISH_RE = re.compile(r"https?:|www\.|\.(com|org|net|io|tw|edu|gov|co)\b|[/\\@]|\w_\w", re.IGNORECASE)
@@ -195,10 +182,39 @@ def restore(text, originals):
     return re.sub(r"\s+", " ", PLACEHOLDER_RE.sub(sub, text)).strip()
 
 
+LLM_PROMPT = (
+    "Translate the user's {src} text into {dst}. Keep every token like Z0Z, Z1Z exactly as written. "
+    "Reply with the translation only, no notes."
+)
+
+
+def language_name(code):
+    names = {v: k for k, v in LANGUAGES.items()}
+    return names.get(code, names.get({"zh": "zh-CN"}.get(code, code), code)).title()
+
+
+def llm_translate(text, src, dst, url, model, timeout=30):
+    """Translate with any OpenAI-compatible server running on this machine (Ollama, LM Studio, llama.cpp...)."""
+    body = json.dumps({
+        "model": model, "temperature": 0, "stream": False,
+        "messages": [
+            {"role": "system", "content": LLM_PROMPT.format(src=language_name(src), dst=language_name(dst))},
+            {"role": "user", "content": text},
+        ],
+    }).encode()
+    req = urllib.request.Request(url.rstrip("/") + "/chat/completions", body,
+                                 {"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        out = json.load(r)["choices"][0]["message"]["content"]
+    return re.sub(r"<think>.*?</think>", "", out, flags=re.S).strip()
+
+
 class Translator:
     def __init__(self):
         self.cache = {}
         self.missing_packs = set()  # Argos packs we needed but don't have
+        self.llm = None  # (url, model) of a local LLM server to use instead of Argos, or None
+        self.engine = "offline"  # engine used for the most recent translation
 
     def _argos(self, protected, src, dst):
         """Translate offline. Returns None (and records what's missing) if packs aren't installed."""
@@ -207,8 +223,9 @@ class Translator:
         if a == "auto" or missing:
             self.missing_packs.update(missing)
             return None
-        import argostranslate.translate as at
-        return at.translate(protected, a, b)
+        for pair in needed_pairs(src, dst) or [(a, b)]:  # via English when there is no direct pack
+            protected = packs.translate(protected, *pair) if pair[0] != pair[1] else protected
+        return protected
 
     def clear(self):
         self.cache.clear()
@@ -223,7 +240,16 @@ class Translator:
             result = None  # the line is only proper nouns / symbols: nothing to translate
         else:
             try:
-                out = self._argos(protected, src, dst)
+                out = None
+                if self.llm:
+                    try:
+                        out = llm_translate(protected, src, dst, *self.llm)
+                        self.engine = "llm"
+                    except Exception:
+                        out = None  # server not running: fall back to Argos
+                if not out:
+                    out = self._argos(protected, src, dst)
+                    self.engine = "offline"
                 result = restore(out, originals) if out else None
                 if result and result.strip().lower() == text.strip().lower():
                     result = None
