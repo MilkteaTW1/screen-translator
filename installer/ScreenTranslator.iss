@@ -1,6 +1,6 @@
 ; Inno Setup script. Build with: ISCC installer\ScreenTranslator.iss  (after build.bat has produced the PyInstaller folder)
 #define AppName "Screen Translator"
-#define AppVersion "0.5.9"
+#define AppVersion "0.5.10"
 #ifndef SourceDir
   #define SourceDir "..\dist\ScreenTranslator"
 #endif

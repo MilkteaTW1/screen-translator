@@ -79,4 +79,8 @@
     <string name="status_screen">正在翻譯螢幕</string>
     <string name="status_speech">正在翻譯語音</string>
     <string name="status_both">正在翻譯螢幕與語音</string>
+    <string name="sound_source">要翻譯的聲音</string>
+    <string name="source_phone">手機播放的聲音(影片、通話、直播)</string>
+    <string name="source_mic">麥克風</string>
+    <string name="source_note">要聽到手機播放的聲音,Android 規定必須分享螢幕:開始語音翻譯時會詢問一次。除非你也開始螢幕翻譯,否則不會翻譯畫面。</string>
 </resources>

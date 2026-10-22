@@ -143,8 +143,11 @@ class MainActivity : ComponentActivity() {
 
         // Speech.
         val speechCard = Ui.card(ctx, getString(R.string.section_speech))
-        val micBox = Ui.switch(ctx, getString(R.string.speech_mic), prefs.speechMic)
-        speechCard.addView(micBox)
+        speechCard.addView(Ui.label(ctx, getString(R.string.sound_source)))
+        val soundSource = Ui.spinner(ctx, listOf(getString(R.string.source_phone), getString(R.string.source_mic)),
+            if (prefs.speechMic) 1 else 0)
+        speechCard.addView(soundSource)
+        speechCard.addView(Ui.text(ctx, getString(R.string.source_note), 12f, Ui.MUTED).apply { setPadding(0, dp(8), 0, 0) })
         speechCard.addView(Ui.label(ctx, getString(R.string.spoken_language)))
         val speechLang = Ui.spinner(ctx, VoskModels.languages.map { it.label }, prefs.speechLang)
         speechCard.addView(speechLang)
@@ -218,10 +221,18 @@ class MainActivity : ComponentActivity() {
             prefs.skipNames = skip.isChecked
             prefs.useGoogle = google.isChecked
             prefs.glossary = glossary.text.toString()
-            prefs.speechMic = micBox.isChecked
+            prefs.speechMic = soundSource.selectedItemPosition == 1
             prefs.speechLang = speechLang.selectedItemPosition
         }
-        for (s in listOf(micBox, google, skip)) s.setOnCheckedChangeListener { _, _ -> save() }
+        for (s in listOf(google, skip)) s.setOnCheckedChangeListener { _, _ -> save() }
+        soundSource.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+            var first = 1
+            override fun onItemSelected(p: AdapterView<*>?, v: View?, pos: Int, id: Long) {
+                if (first > 0) { first--; return }
+                save()
+            }
+            override fun onNothingSelected(p: AdapterView<*>?) {}
+        }
         val onPick = object : AdapterView.OnItemSelectedListener {
             var first = 2  // ignore the two initial callbacks
             override fun onItemSelected(p: AdapterView<*>?, v: View?, pos: Int, id: Long) {
@@ -271,10 +282,10 @@ class MainActivity : ComponentActivity() {
             save()
             when {
                 CaptureService.running && CaptureService.speechOn -> setFeatures(screen = CaptureService.screenOn, speech = false)
-                CaptureService.running -> ensureLanguageData {
+                CaptureService.running && (CaptureService.hasProjection || prefs.speechMic) -> ensureLanguageData {
                     ensureSpeechModel {
-                        val usesMic = prefs.speechMic || !CaptureService.hasProjection
-                        if (usesMic && checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+                        // Recording, of the microphone or of what the phone plays, both need this permission.
+                        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
                             pendingSpeechOn = true
                             micLauncher.launch(Manifest.permission.RECORD_AUDIO)
                         } else {
@@ -383,8 +394,8 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun askProjection() {
-        // Speech alone listens to the microphone and needs no screen sharing at all.
-        if (!prefs.screenText) {
+        // Only speech from the microphone needs no screen sharing; what the phone plays can only be heard with it.
+        if (!prefs.screenText && prefs.speechMic) {
             startForegroundService(Intent(this, CaptureService::class.java))
             status.postDelayed({ refresh() }, 600)
             return

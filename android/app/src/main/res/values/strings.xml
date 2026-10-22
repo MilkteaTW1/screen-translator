@@ -80,4 +80,8 @@
     <string name="status_screen">Translating the screen</string>
     <string name="status_speech">Translating speech</string>
     <string name="status_both">Translating the screen and speech</string>
+    <string name="sound_source">Sound to translate</string>
+    <string name="source_phone">What the phone plays (videos, calls, streams)</string>
+    <string name="source_mic">The microphone</string>
+    <string name="source_note">Hearing what the phone plays needs screen sharing (an Android rule): you are asked once when speech translation starts. The screen itself is only translated if you also start screen translation.</string>
 </resources>

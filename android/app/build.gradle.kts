@@ -11,8 +11,8 @@ android {
         applicationId = "io.github.milkteatw1.screentranslator"
         minSdk = 26
         targetSdk = 34
-        versionCode = 11
-        versionName = "0.5.9"
+        versionCode = 12
+        versionName = "0.5.10"
     }
 
     // The release key lives outside the repo: its path and passwords come from ~/.gradle/gradle.properties
