@@ -3,10 +3,12 @@
 The Argos Translate library itself is not used at run time (it drags in torch and spacy, which makes
 the app large, slow to start and hungry). Packs are the same `.argosmodel` files, so ones already
 installed by Argos are found too."""
+import http.client
 import json
 import os
 import re
 import tempfile
+import time
 import urllib.request
 import zipfile
 from pathlib import Path
@@ -81,6 +83,31 @@ def import_file(path):
     _models.clear()
 
 
+def _fetch(url, path, progress=None, attempts=4):
+    """Download url into path, resuming from what is already there after a dropped connection."""
+    for attempt in range(attempts):
+        have = os.path.getsize(path)
+        req = urllib.request.Request(url, headers={"Range": f"bytes={have}-"} if have else {})
+        try:
+            with urllib.request.urlopen(req, timeout=60) as r:
+                if have and r.status != 206:  # server ignored Range: start over
+                    have = 0
+                total = have + int(r.headers.get("Content-Length") or 0)
+                with open(path, "ab" if have else "wb") as f:
+                    while chunk := r.read(1 << 16):
+                        f.write(chunk)
+                        have += len(chunk)
+                        if progress and total:
+                            progress(min(100, int(have * 100 / total)))
+            if total and have < total:  # connection dropped mid-file without an error
+                raise ConnectionError("download was cut off")
+            return
+        except (OSError, http.client.HTTPException):
+            if attempt == attempts - 1:
+                raise
+            time.sleep(2 * (attempt + 1))
+
+
 def install(src, dst, progress=None):
     """Download one pack (needs internet; tens of MB) into PACK_DIR. progress(percent) is optional."""
     with urllib.request.urlopen(INDEX_URL, timeout=30) as r:
@@ -90,18 +117,14 @@ def install(src, dst, progress=None):
     if entry is None:
         raise RuntimeError(f"no such language pack: {src}>{dst}")
     PACK_DIR.mkdir(parents=True, exist_ok=True)
-    with tempfile.NamedTemporaryFile(suffix=".argosmodel", delete=False) as tmp:
-        with urllib.request.urlopen(entry["links"][0], timeout=60) as r:
-            total = int(r.headers.get("Content-Length") or 0)
-            done = 0
-            while chunk := r.read(1 << 16):
-                tmp.write(chunk)
-                done += len(chunk)
-                if progress and total:
-                    progress(int(done * 100 / total))
+    fd, tmp = tempfile.mkstemp(suffix=".argosmodel")
+    os.close(fd)
     try:
-        with zipfile.ZipFile(tmp.name) as z:
+        _fetch(entry["links"][0], tmp, progress)
+        with zipfile.ZipFile(tmp) as z:
+            if z.testzip() is not None:
+                raise RuntimeError("downloaded pack is corrupt, please try again")
             z.extractall(PACK_DIR)
     finally:
-        os.unlink(tmp.name)
+        os.unlink(tmp)
     _models.pop((src, dst), None)

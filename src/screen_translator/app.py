@@ -22,7 +22,7 @@ from PySide6.QtWidgets import (
 from . import ocr
 from .overlay import CaptionOverlay, CoverChip, Overlay
 from .speech import MODELS, SpeechWorker, download_model, find_model, import_model
-from . import packs
+from . import __version__, packs, updater
 from .translator import (
     LANGUAGES, Translator, install_pack, looks_like_source, missing_pairs, needed_pairs, ocr_tag_to_code,
 )
@@ -256,6 +256,8 @@ class Panel(QWidget):
     pack_status = Signal(str)
     pack_finished = Signal()
     speech_model_done = Signal(bool)
+    update_found = Signal(str, str)
+    update_ready = Signal(str)
 
     def __init__(self, worker, overlay, langs, speech=None, captions=None):
         super().__init__()
@@ -358,6 +360,8 @@ class Panel(QWidget):
             w.currentIndexChanged.connect(self.ensure_packs)
         self.pack_status.connect(self.state.setText)
         self.pack_finished.connect(self._packs_ready)
+        self.update_found.connect(self._offer_update)
+        self.update_ready.connect(self._run_installer)
         self.interval.valueChanged.connect(self.apply)
         self.hide_capture.toggled.connect(self.apply)
         self.skip_names.toggled.connect(self.apply)
@@ -456,6 +460,39 @@ class Panel(QWidget):
         except Exception as e:
             self.pack_status.emit(f"Download failed: {e}")
         self.pack_finished.emit()
+
+    def check_for_updates(self, quiet=True):
+        """Look for a newer release in the background; offers it if there is one."""
+        def run():
+            found = updater.check()
+            if found:
+                self.update_found.emit(found[0], found[1])
+            elif not quiet:
+                self.pack_status.emit("Screen Translator is up to date")
+        threading.Thread(target=run, daemon=True).start()
+
+    def _offer_update(self, version, url):
+        box = QMessageBox(self)
+        box.setWindowTitle("Update available")
+        box.setText(f"Screen Translator {version} is available (you have {__version__}).\n"
+                    "Download and install it now? The app will close while it installs.")
+        yes = box.addButton("Update now", QMessageBox.AcceptRole)
+        box.addButton("Later", QMessageBox.RejectRole)
+        box.exec()
+        if box.clickedButton() is not yes:
+            return
+
+        def run():
+            try:
+                self.update_ready.emit(updater.download(
+                    url, lambda pct: self.pack_status.emit(f"Downloading update: {pct}%")))
+            except Exception as e:
+                self.pack_status.emit(f"Update download failed: {e}")
+        threading.Thread(target=run, daemon=True).start()
+
+    def _run_installer(self, path):
+        os.startfile(path)
+        self.close()
 
     def _packs_ready(self):
         self.downloading = False
@@ -571,9 +608,9 @@ def main():
     langs = LANGUAGES
     overlay = Overlay(app.primaryScreen())
     overlay.show()
-    worker.background.connect(lambda b: overlay.set_background(*b))
     chip = CoverChip(overlay)  # noqa: F841 (kept alive; shows itself when a translation covers text)
     worker = Worker(langs)
+    worker.background.connect(lambda b: overlay.set_background(*b))
     overlay.set_capture_hidden(worker.settings["hide_from_capture"])
     speech = SpeechWorker()
     captions = CaptionOverlay(app.primaryScreen())
@@ -587,6 +624,7 @@ def main():
     if worker.settings["speech_enabled"] and find_model(worker.settings["speech_model"]):
         panel._start_speech()
     threading.Thread(target=prewarm, args=(worker,), daemon=True).start()
+    panel.check_for_updates()
 
     tray = QSystemTrayIcon(app.style().standardIcon(app.style().StandardPixmap.SP_ComputerIcon), app)
     menu = QMenu()
@@ -600,8 +638,9 @@ def main():
     talk.setChecked(panel.speech_enabled.isChecked())
     talk.toggled.connect(panel.speech_enabled.setChecked)
     panel.speech_enabled.toggled.connect(talk.setChecked)
+    update = QAction("Check for updates", menu, triggered=lambda: panel.check_for_updates(quiet=False))
     quit_ = QAction("Quit", menu, triggered=app.quit)
-    menu.addActions([show, toggle, talk, shots, quit_])
+    menu.addActions([show, toggle, talk, shots, update, quit_])
     tray.setContextMenu(menu)
     tray.activated.connect(lambda r: panel.show() if r == QSystemTrayIcon.Trigger else None)
     tray.show()
