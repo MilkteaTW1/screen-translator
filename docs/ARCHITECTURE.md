@@ -5,7 +5,9 @@ src/screen_translator/
   app.py         Worker thread (scan loop, block tracking, batching), settings panel, tray icon
   ocr.py         Windows OCR wrapper; merge_paragraphs joins wrapped lines into sentences
   translator.py  Offline translation (packs.py runs Argos packs on CTranslate2), source-language filters, proper-noun protection
-  overlay.py     Transparent click-through overlay; one translation box above each block
+  overlay.py     Transparent click-through overlay; one translation box above each block, and the
+                 caption strip for speech
+  speech.py      System-audio/mic capture (soundcard), loudness segmenter, faster-whisper, translation
 scripts/download_packs.py   Install Argos language packs
 tests/                      pytest suite (filters, paragraph merge, overlay placement)
 ```

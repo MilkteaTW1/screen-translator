@@ -1,8 +1,6 @@
 PySide6>=6.6
 mss>=9.0
 numpy>=1.26
-ctranslate2>=4.0
-sentencepiece>=0.2
 winrt-runtime
 winrt-Windows.Foundation
 winrt-Windows.Foundation.Collections
@@ -10,3 +8,7 @@ winrt-Windows.Globalization
 winrt-Windows.Graphics.Imaging
 winrt-Windows.Media.Ocr
 winrt-Windows.Storage.Streams
+ctranslate2>=4.0
+sentencepiece>=0.2
+faster-whisper>=1.0
+soundcard>=0.4.3

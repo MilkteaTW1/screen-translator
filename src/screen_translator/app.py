@@ -12,7 +12,7 @@ from pathlib import Path
 
 import mss
 import numpy as np
-from PySide6.QtCore import QObject, Qt, Signal
+from PySide6.QtCore import QObject, Qt, QTimer, Signal
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QFileDialog, QComboBox, QDoubleSpinBox, QFormLayout, QLabel, QLineEdit, QMenu, QMessageBox,
@@ -20,7 +20,8 @@ from PySide6.QtWidgets import (
 )
 
 from . import ocr
-from .overlay import Overlay
+from .overlay import CaptionOverlay, Overlay
+from .speech import MODELS, SpeechWorker, download_model, find_model, import_model
 from . import packs
 from .translator import (
     LANGUAGES, Translator, install_pack, looks_like_source, missing_pairs, needed_pairs, ocr_tag_to_code,
@@ -32,6 +33,7 @@ DEFAULTS = {
     "auto_proper": True, "keep_katakana": False, "glossary": "",
     "hide_from_capture": True, "skip_names": True,
     "autostart": False, "start_on_launch": False,
+    "speech_enabled": False, "speech_source": "system", "speech_model": "base", "speech_lang": "auto",
     "llm_enabled": False, "llm_url": "http://localhost:11434/v1", "llm_model": "qwen2.5:7b",
 }
 MAX_BLOCKS = 40  # most text blocks translated per screen pass
@@ -251,10 +253,12 @@ class Worker(QObject):
 class Panel(QWidget):
     pack_status = Signal(str)
     pack_finished = Signal()
+    speech_model_done = Signal(bool)
 
-    def __init__(self, worker, overlay, langs):
+    def __init__(self, worker, overlay, langs, speech=None, captions=None):
         super().__init__()
         self.worker, self.overlay = worker, overlay
+        self.speech, self.captions = speech, captions
         self.langs = langs
         self.downloading = False
         self.setWindowTitle("Screen Translator")
@@ -292,6 +296,26 @@ class Panel(QWidget):
         self.llm.setChecked(s["llm_enabled"])
         self.llm_url = QLineEdit(s["llm_url"])
         self.llm_model = QLineEdit(s["llm_model"])
+        self.speech_enabled = QCheckBox("Translate speech: list what is heard at the bottom of the screen")
+        self.speech_enabled.setChecked(s["speech_enabled"])
+        self.speech_source = QComboBox()
+        self.speech_source.addItem("System audio (what the computer plays)", "system")
+        self.speech_source.addItem("Microphone", "mic")
+        self._select(self.speech_source, s["speech_source"])
+        self.speech_model = QComboBox()
+        for name, mb in MODELS.items():
+            self.speech_model.addItem(f"{name} (about {mb} MB)", name)
+        self._select(self.speech_model, s["speech_model"])
+        self.speech_lang = QComboBox()
+        self.speech_lang.addItem("Auto-detect", "auto")
+        seen = set()
+        for name, code in sorted(langs.items()):
+            base = code.split("-")[0]
+            if base not in seen:
+                seen.add(base)
+                self.speech_lang.addItem(name.title(), base)
+        self._select(self.speech_lang, s["speech_lang"])
+        self.speech_state = QLabel("")
         self.glossary = QPlainTextEdit(s["glossary"])
         self.glossary.setPlaceholderText("Never translate these (one per line)\ne.g. Hatsune Miku\nNVIDIA")
         self.toggle = QPushButton("Start")
@@ -315,6 +339,13 @@ class Panel(QWidget):
         llm_form.addRow("Server URL", self.llm_url)
         llm_form.addRow("Model", self.llm_model)
         lay.addLayout(llm_form)
+        lay.addWidget(self.speech_enabled)
+        speech_form = QFormLayout()
+        speech_form.addRow("Audio from", self.speech_source)
+        speech_form.addRow("Speech language", self.speech_lang)
+        speech_form.addRow("Speech model", self.speech_model)
+        lay.addLayout(speech_form)
+        lay.addWidget(self.speech_state)
         lay.addWidget(QLabel("Do-not-translate list"))
         lay.addWidget(self.glossary)
         lay.addWidget(self.toggle)
@@ -338,6 +369,16 @@ class Panel(QWidget):
         self.llm_model.editingFinished.connect(self.apply)
         worker.status.connect(self.state.setText)
         worker.results.connect(overlay.set_items)
+        self.speech_enabled.toggled.connect(self.apply)
+        self.speech_enabled.toggled.connect(self.on_speech_toggle)
+        for w in (self.speech_source, self.speech_model):
+            w.currentIndexChanged.connect(self.apply)
+            w.currentIndexChanged.connect(self._restart_speech)
+        self.speech_lang.currentIndexChanged.connect(self.apply)
+        self.speech_model_done.connect(self._speech_model_done)
+        if speech is not None:
+            speech.status.connect(self.speech_state.setText)
+            speech.line.connect(captions.add)
 
         if not installed:
             self.state.setText("No OCR language packs installed in Windows")
@@ -358,6 +399,8 @@ class Panel(QWidget):
             "skip_names": self.skip_names.isChecked(), "llm_enabled": self.llm.isChecked(),
             "autostart": self.autostart.isChecked(), "start_on_launch": self.start_on_launch.isChecked(),
             "llm_url": self.llm_url.text().strip(), "llm_model": self.llm_model.text().strip(),
+            "speech_enabled": self.speech_enabled.isChecked(), "speech_source": self.speech_source.currentData(),
+            "speech_model": self.speech_model.currentData(), "speech_lang": self.speech_lang.currentData(),
         }
 
     def apply(self, *_):
@@ -366,15 +409,18 @@ class Panel(QWidget):
         self.overlay.set_capture_hidden(s["hide_from_capture"])
         SETTINGS_PATH.write_text(json.dumps(s, ensure_ascii=False, indent=2), encoding="utf-8")
         self.worker.configure(s)
+        if self.speech is not None:
+            self.speech.configure(s)
+            self.captions.set_capture_hidden(s["hide_from_capture"])
         try:
             set_autostart(s["autostart"])
         except OSError:
             pass
 
-    def ensure_packs(self, *_):
+    def ensure_packs(self, *_, src=None):
         """Offer to download the offline language packs the chosen pair needs."""
         s = self.current()
-        src = ocr_tag_to_code(s["source"], set(self.langs.values()))
+        src = src or ocr_tag_to_code(s["source"], set(self.langs.values()))
         missing = missing_pairs(src, s["target"])
         if not missing or self.downloading:
             return
@@ -415,6 +461,72 @@ class Panel(QWidget):
         self.worker.translator.clear()
         self.worker.dirty = True
 
+    def on_speech_toggle(self, on):
+        if self.speech is None:
+            return
+        if not on:
+            self.speech.stop()
+            self.captions.clear()
+            self.speech_state.setText("")
+        elif find_model(self.speech_model.currentData()):
+            self._start_speech()
+        else:
+            self._ask_model(self.speech_model.currentData())
+
+    def _start_speech(self):
+        self.speech.configure(self.current())
+        lang = self.speech_lang.currentData()
+        self.ensure_packs(src=None if lang == "auto" else lang)
+        self.speech.start()
+
+    def _restart_speech(self, *_):
+        if self.speech is not None and self.speech.running:
+            self.speech.stop()
+            QTimer.singleShot(800, self._start_speech)
+
+    def _ask_model(self, name):
+        """The speech model is a one-time download; the user decides how to get it."""
+        box = QMessageBox(self)
+        box.setWindowTitle("Speech model")
+        box.setText(f"Speech translation needs the \"{name}\" speech model (about {MODELS[name]} MB, downloaded once, "
+                    "then everything runs offline). How do you want to get it?")
+        download = box.addButton("Download now", QMessageBox.AcceptRole)
+        have_folder = box.addButton("I have the model folder...", QMessageBox.ActionRole)
+        box.addButton("Not now", QMessageBox.RejectRole)
+        box.exec()
+        if box.clickedButton() is have_folder:
+            folder = QFileDialog.getExistingDirectory(self, "Pick a faster-whisper model folder (contains model.bin)")
+            try:
+                if not folder:
+                    raise RuntimeError("no folder picked")
+                import_model(folder, name)
+                self.speech_model_done.emit(True)
+            except Exception as e:
+                self.speech_state.setText(f"Could not use that folder: {e}")
+                self.speech_model_done.emit(False)
+        elif box.clickedButton() is download:
+            self.speech_state.setText(f"Downloading the {name} speech model ...")
+            threading.Thread(target=self._download_model, args=(name,), daemon=True).start()
+        else:
+            self.speech_model_done.emit(False)
+
+    def _download_model(self, name):
+        try:
+            download_model(name)
+            self.speech_model_done.emit(True)
+        except Exception as e:
+            self.pack_status.emit(f"Download failed: {e}")
+            self.speech_model_done.emit(False)
+
+    def _speech_model_done(self, ok):
+        if ok:
+            self._start_speech()
+        else:
+            self.speech_enabled.blockSignals(True)
+            self.speech_enabled.setChecked(False)
+            self.speech_enabled.blockSignals(False)
+            self.apply()
+
     def on_toggle(self):
         if self.worker.running:
             self.worker.stop()
@@ -433,6 +545,8 @@ class Panel(QWidget):
 
     def closeEvent(self, e):  # the X button quits the whole app
         self.worker.stop()
+        if self.speech is not None:
+            self.speech.stop()
         e.accept()
         QApplication.quit()
 
@@ -457,12 +571,17 @@ def main():
     overlay.show()
     worker = Worker(langs)
     overlay.set_capture_hidden(worker.settings["hide_from_capture"])
-    panel = Panel(worker, overlay, langs)
+    speech = SpeechWorker()
+    captions = CaptionOverlay(app.primaryScreen())
+    captions.set_capture_hidden(worker.settings["hide_from_capture"])
+    panel = Panel(worker, overlay, langs, speech, captions)
     minimized = "--minimized" in sys.argv
     if not minimized:
         panel.show()
     if worker.settings["start_on_launch"]:
         panel.on_toggle()
+    if worker.settings["speech_enabled"] and find_model(worker.settings["speech_model"]):
+        panel._start_speech()
     threading.Thread(target=prewarm, args=(worker,), daemon=True).start()
 
     tray = QSystemTrayIcon(app.style().standardIcon(app.style().StandardPixmap.SP_ComputerIcon), app)
@@ -473,8 +592,12 @@ def main():
     shots.setChecked(not panel.hide_capture.isChecked())
     shots.toggled.connect(lambda on: panel.hide_capture.setChecked(not on))
     panel.hide_capture.toggled.connect(lambda hide: shots.setChecked(not hide))
+    talk = QAction("Translate speech", menu, checkable=True)
+    talk.setChecked(panel.speech_enabled.isChecked())
+    talk.toggled.connect(panel.speech_enabled.setChecked)
+    panel.speech_enabled.toggled.connect(talk.setChecked)
     quit_ = QAction("Quit", menu, triggered=app.quit)
-    menu.addActions([show, toggle, shots, quit_])
+    menu.addActions([show, toggle, talk, shots, quit_])
     tray.setContextMenu(menu)
     tray.activated.connect(lambda r: panel.show() if r == QSystemTrayIcon.Trigger else None)
     tray.show()

@@ -5,8 +5,8 @@ cd /d "%~dp0"
 if "%OUT%"=="" set OUT=%~dp0dist
 pyinstaller --noconfirm --windowed --name ScreenTranslator --paths src ^
   --distpath "%OUT%" --workpath "%OUT%\work" --specpath "%OUT%" ^
-  --collect-all ctranslate2 --collect-all sentencepiece ^
-  --exclude-module torch --exclude-module spacy --exclude-module stanza --exclude-module argostranslate ^
+  --collect-all ctranslate2 --collect-all sentencepiece --collect-all faster_whisper --collect-all soundcard ^
+  --exclude-module torch --exclude-module spacy --exclude-module stanza --exclude-module argostranslate --exclude-module av ^
   --exclude-module onnxruntime --exclude-module matplotlib --exclude-module tkinter ^
   --exclude-module PySide6.QtWebEngineCore --exclude-module PySide6.QtWebEngineWidgets ^
   --exclude-module PySide6.QtPdf --exclude-module PySide6.QtQuick --exclude-module PySide6.QtQml ^

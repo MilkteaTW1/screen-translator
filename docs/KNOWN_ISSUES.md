@@ -13,3 +13,7 @@
   similarity check); no auto-start at boot (Android needs a fresh capture consent each time).
 - Android: Traditional Chinese is a Simplified-to-Traditional character conversion, so mainland vocabulary remains.
 - Android: only arm64 and x86_64 APKs are built; no iOS version.
+- Speech: captions appear after each pause in speech (a few seconds of delay, longer with the `small` model on
+  a slow CPU); music and overlapping voices transcribe poorly; no speaker labels.
+- Speech: Whisper reports Chinese as `zh`, so translating spoken Chinese uses the Simplified pack.
+- Speech: not on Android yet (Android's audio-capture API only works for apps that allow it).
