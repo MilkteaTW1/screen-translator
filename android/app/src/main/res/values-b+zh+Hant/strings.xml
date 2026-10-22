@@ -10,7 +10,7 @@
     <string name="what_to_translate">要翻譯什麼</string>
     <string name="screen_text">螢幕上的文字</string>
     <string name="speech">語音(把聽到的內容列在下方)</string>
-    <string name="speech_mic">改聽麥克風,而不是手機播放的聲音</string>
+    <string name="speech_mic">螢幕分享時也改聽麥克風(只開語音翻譯時一律用麥克風,不需要分享螢幕)</string>
     <string name="spoken_language">說話的語言</string>
     <string name="check_updates">檢查更新(v%1$s)</string>
     <string name="start">開始</string>

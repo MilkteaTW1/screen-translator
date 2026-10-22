@@ -10,8 +10,9 @@ import java.net.URLEncoder
 /** Google Translate (the free web endpoint): the text is sent to Google. Offline ML Kit is the backup. */
 object GoogleTranslate {
     private const val TAG = "ScreenTranslator"
-    private const val RETRY_AFTER_MS = 30_000L  // after a failure (offline, blocked), leave Google alone for a while
-    @Volatile private var downAt = -RETRY_AFTER_MS
+    private const val RETRY_AFTER_MS = 30_000L  // after a failure (offline), leave Google alone for a while
+    private const val RATE_LIMITED_MS = 600_000L  // Google said "too many requests": ten minutes
+    @Volatile private var retryAt = 0L
 
     /** Google's code for a target language. */
     fun code(lang: Lang) = if (lang.code == "zh") (if (lang.traditional) "zh-TW" else "zh-CN") else lang.code
@@ -34,7 +35,7 @@ object GoogleTranslate {
 
     /** The translation, or null when Google can't be reached (the caller falls back to offline translation). */
     fun translate(text: String, target: Lang): String? {
-        if (SystemClock.uptimeMillis() - downAt < RETRY_AFTER_MS) return null
+        if (SystemClock.uptimeMillis() < retryAt) return null
         return try {
             val url = URL("https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&dt=t&tl=" +
                 URLEncoder.encode(code(target), "UTF-8"))
@@ -46,7 +47,13 @@ object GoogleTranslate {
             conn.setRequestProperty("User-Agent", "Mozilla/5.0")
             conn.setRequestProperty("Content-Type", "application/x-www-form-urlencoded")
             conn.outputStream.use { it.write(("q=" + URLEncoder.encode(text, "UTF-8")).toByteArray()) }
-            if (conn.responseCode != 200) throw java.io.IOException("Google answered ${conn.responseCode}")
+            val code = conn.responseCode
+            if (code == 429) {
+                retryAt = SystemClock.uptimeMillis() + RATE_LIMITED_MS
+                Log.w(TAG, "Google Translate is rate-limited: offline translation for ten minutes")
+                return null
+            }
+            if (code != 200) throw java.io.IOException("Google answered $code")
             val parts = JSONArray(conn.inputStream.bufferedReader().use { it.readText() }).getJSONArray(0)
             buildString {
                 for (i in 0 until parts.length()) {
@@ -56,7 +63,7 @@ object GoogleTranslate {
             }.ifEmpty { null }
         } catch (e: Exception) {
             Log.w(TAG, "Google Translate failed: ${e.message}")
-            downAt = SystemClock.uptimeMillis()
+            retryAt = SystemClock.uptimeMillis() + RETRY_AFTER_MS
             null
         }
     }

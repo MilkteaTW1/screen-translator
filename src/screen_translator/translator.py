@@ -191,6 +191,10 @@ def language_name(code):
     return names.get(code, names.get({"zh": "zh-CN"}.get(code, code), code)).title()
 
 
+class RateLimited(OSError):
+    """Google answered "too many requests"."""
+
+
 _google_conn = threading.local()  # one kept-open connection per thread: no new TLS handshake for every request
 
 
@@ -208,6 +212,8 @@ def google_translate(text, src, dst, timeout=8):
             conn.request("POST", path, body, headers)
             resp = conn.getresponse()
             raw = resp.read()
+            if resp.status == 429:
+                raise RateLimited("Google answered 429 (too many requests)")
             if resp.status != 200:
                 raise OSError(f"Google answered {resp.status}")
             break
@@ -228,7 +234,8 @@ def google_translate_group(texts, src, dst):
 
 
 class Translator:
-    RETRY_AFTER = 30.0  # seconds without trying Google again after it failed (offline, blocked...)
+    RETRY_AFTER = 30.0  # seconds without trying Google again after it failed (offline...)
+    RATE_LIMITED = 600.0  # after "too many requests"
 
     def __init__(self):
         self.cache = {}
@@ -251,7 +258,7 @@ class Translator:
 
     def _google_many(self, items, src, dst):
         """{index: translation} for the items Google could do; nothing when it is unreachable."""
-        if time.monotonic() - self._google_down < self.RETRY_AFTER:
+        if time.monotonic() < self._google_down:
             return {}
 
         groups, group, size = [], [], 0
@@ -264,19 +271,26 @@ class Translator:
         if group:
             groups.append(group)
 
+        limited = []
+
         def one(group):
             try:
                 lines = google_translate_group([g[2] for g in group], src, dst)
                 if lines is not None:
                     return list(zip((g[0] for g in group), lines))
                 return [(g[0], google_translate(g[2], src, dst)) for g in group]  # lines got mixed up: one by one
+            except RateLimited:
+                limited.append(1)
+                return [(g[0], None) for g in group]
             except Exception:
                 return [(g[0], None) for g in group]
 
         with ThreadPoolExecutor(max_workers=6) as pool:
             done = dict(pair for part in pool.map(one, groups) for pair in part)
-        if items and not any(done.values()):
-            self._google_down = time.monotonic()
+        if limited:
+            self._google_down = time.monotonic() + self.RATE_LIMITED
+        elif items and not any(done.values()):
+            self._google_down = time.monotonic() + self.RETRY_AFTER
         return {i: out for i, out in done.items() if out}
 
     def clear(self):

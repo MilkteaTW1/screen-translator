@@ -137,7 +137,7 @@ class CaptureService : Service() {
         tgt = prefs.targetLang
         glossary = prefs.glossary.lines().map { it.trim() }.filter { it.isNotEmpty() }
         val hasProjection = intent.hasExtra(EXTRA_DATA)
-        startInForeground(hasProjection, prefs.speech && prefs.speechMic)
+        startInForeground(hasProjection, prefs.speech && (prefs.speechMic || !hasProjection))
         handler = Handler(thread.looper)
         try {
             setUp(intent, hasProjection)
@@ -170,7 +170,7 @@ class CaptureService : Service() {
             publish()
         }
         if (speech && !speechOn) {
-            if (prefs.speechMic) startInForeground(projection != null, true)
+            if (prefs.speechMic || projection == null) startInForeground(projection != null, true)
             setUpSpeech(Intent())
             speechOn = true
         } else if (!speech && speechOn) {
@@ -341,7 +341,8 @@ class CaptureService : Service() {
             onStatus = { Log.i(TAG, it) },
         )
         speech = engine
-        val kind = if (prefs.speechMic) AudioKind.MICROPHONE else AudioKind.SYSTEM
+        // Hearing what the phone plays needs screen sharing (Android's rule); without it, listen to the microphone.
+        val kind = if (prefs.speechMic || projection == null) AudioKind.MICROPHONE else AudioKind.SYSTEM
         engine.start(kind, projection, intent.getStringExtra(EXTRA_TEST_WAV))
     }
 

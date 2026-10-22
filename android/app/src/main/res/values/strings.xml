@@ -11,7 +11,7 @@
     <string name="what_to_translate">What to translate</string>
     <string name="screen_text">Text on the screen</string>
     <string name="speech">Speech (list what is heard at the bottom)</string>
-    <string name="speech_mic">Listen to the microphone instead of phone audio</string>
+    <string name="speech_mic">Use the microphone even while the screen is shared (on its own, speech always uses the microphone)</string>
     <string name="spoken_language">Spoken language</string>
     <string name="check_updates">Check for updates (v%1$s)</string>
     <string name="start">Start</string>

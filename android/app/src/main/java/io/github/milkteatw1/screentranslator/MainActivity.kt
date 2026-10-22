@@ -271,9 +271,10 @@ class MainActivity : ComponentActivity() {
             save()
             when {
                 CaptureService.running && CaptureService.speechOn -> setFeatures(screen = CaptureService.screenOn, speech = false)
-                CaptureService.running && (CaptureService.hasProjection || prefs.speechMic) -> ensureLanguageData {
+                CaptureService.running -> ensureLanguageData {
                     ensureSpeechModel {
-                        if (prefs.speechMic && checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+                        val usesMic = prefs.speechMic || !CaptureService.hasProjection
+                        if (usesMic && checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
                             pendingSpeechOn = true
                             micLauncher.launch(Manifest.permission.RECORD_AUDIO)
                         } else {
@@ -382,8 +383,8 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun askProjection() {
-        // Only listening to the microphone needs no screen capture at all.
-        if (!prefs.screenText && prefs.speechMic) {
+        // Speech alone listens to the microphone and needs no screen sharing at all.
+        if (!prefs.screenText) {
             startForegroundService(Intent(this, CaptureService::class.java))
             status.postDelayed({ refresh() }, 600)
             return
@@ -418,7 +419,7 @@ class MainActivity : ComponentActivity() {
 
     /** Translation needs a language-data file per non-English language (about 30 MB). The user decides how to get it. */
     private fun ensureLanguageData(onReady: () -> Unit) {
-        if (prefs.useGoogle) { onReady(); return }  // Google Translate needs no download; offline data is only the backup
+        // Needed even with Google on: it is what translates when Google can't (no internet, or "too many requests").
         val langs = mutableListOf(prefs.targetLang.code)
         if (prefs.screenText) langs += prefs.sourceLang.code
         if (prefs.speech) langs += prefs.speechLanguage.code
