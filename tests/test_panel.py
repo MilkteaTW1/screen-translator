@@ -35,3 +35,12 @@ def test_main_starts_and_quits(monkeypatch, tmp_path):
         appmod.main()
     except SystemExit as e:
         assert e.code == 0
+
+
+def test_scan_schedule():
+    due = appmod.scan_due
+    assert due(True, False, 5.0, 1.0)  # new content after a quiet spell: scan at once
+    assert not due(True, False, 0.3, 1.0)  # constantly changing screen: limited by the interval setting
+    assert not due(False, False, 99.0, 1.0)  # nothing changed: no scan
+    assert due(False, True, appmod.CONFIRM_GAP, 5.0)  # text waiting for confirmation: short gap, not the interval
+    assert not due(False, True, 0.01, 5.0)

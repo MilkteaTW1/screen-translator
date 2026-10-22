@@ -21,6 +21,7 @@ import android.os.Handler
 import android.os.HandlerThread
 import android.os.IBinder
 import android.os.Looper
+import android.os.SystemClock
 import android.util.DisplayMetrics
 import android.util.Log
 import android.view.WindowManager
@@ -51,6 +52,9 @@ class CaptureService : Service() {
         private const val MAX_NEW_PER_SCAN = 80
         private const val TRANSLATE_THREADS = 3
         private const val MAX_CAPTIONS = 4
+        private const val COVER_SETTLE_MS = 400L
+        private const val JUMP = 8.0  // a sudden change of this size (app switch, scroll start) means everything shown is out of date
+        private const val COVER_CHANGE = 2.5  // mean brightness change under a cover that means the text there changed
     }
 
     /** A text block followed from scan to scan, so what is on screen stays steady. */
@@ -61,6 +65,10 @@ class CaptureService : Service() {
         @Volatile var mode = -1  // where the translation goes; decided once, so it never hops around
         var seen = 1
         var missed = 0
+        /** What the screen looked like under our own cover once it was drawn; while it stays the same the text is unchanged. */
+        var sig: IntArray? = null
+        var stale = false  // the screen under the cover changed: read it again
+        var shownAt = 0L  // when it became visible (the captured frame lags the overlay by a moment)
     }
 
     private class Block(val rect: RectF, val text: String, val lineHeight: Float)
@@ -85,6 +93,8 @@ class CaptureService : Service() {
     @Volatile private var tracks = listOf<Track>()
     private var previous: IntArray? = null
     private var staticScreen = false
+    private var lastScreenDiff = 0.0
+    private var forceScan = false  // read the next frame even if the screen looks unchanged
     private var glossary = listOf<String>()
     private val cache = java.util.concurrent.ConcurrentHashMap<String, String>()
     @Volatile private var shown = listOf<String>()
@@ -251,7 +261,7 @@ class CaptureService : Service() {
         var delay = prefs.intervalMs.toLong().coerceAtLeast(100)
         try {
             val unconfirmed = scan()
-            if (unconfirmed) delay = minOf(delay, 250)  // look again soon to confirm new text
+            if (unconfirmed) delay = minOf(delay, 150)  // look again soon to confirm new text
         } catch (e: Exception) {
             Log.w(TAG, "scan failed", e)
         }
@@ -272,16 +282,83 @@ class CaptureService : Service() {
             image.close()
         }
         try {
-            val diff = frameDiff(bitmap)
-            staticScreen = diff != null && diff < 2.0
+            val both = frameDiff(bitmap)
+            val screenDiff = both?.second  // without our own overlay
+            staticScreen = screenDiff != null && screenDiff < 2.0
+            val jumped = screenDiff != null && screenDiff > JUMP && lastScreenDiff < 3.0
+            if (screenDiff != null) lastScreenDiff = screenDiff
+            if (jumped && tracks.isNotEmpty()) {
+                // Our old translations are still on screen and would be read together with the new text.
+                // Take them all down and read the next frame clean. (Not on every large change: a video keeps changing.)
+                tracks = emptyList()
+                forceScan = true
+                publish()
+                return true
+            }
             val unconfirmed = tracks.any { it.seen < 2 }
             val pending = tracks.any { !it.done }
-            if (diff != null && diff <= 0.6 && !unconfirmed && !pending) return false
+            val released = watchCovers(bitmap, screenDiff)
+            if (released) {  // a cover no longer matches its text: take it down, and read the next frame without it
+                forceScan = true
+                publish()
+                return true
+            }
+            if (screenDiff != null && screenDiff <= 0.6 && !unconfirmed && !pending && !forceScan) return false
+            forceScan = false
             sampleLuma(bitmap)
             return process(bitmap)
         } finally {
             bitmap.recycle()
         }
+    }
+
+    /** The area a cover occupies: the text block, a little wider and taller when the translation needs the room. */
+    private fun coverRect(t: Track): RectF {
+        val w = t.rect.width() * 1.6f
+        return RectF(maxOf(0f, t.rect.centerX() - w / 2), t.rect.top,
+            minOf(width.toFloat(), t.rect.centerX() + w / 2), minOf(height.toFloat(), t.rect.top + t.rect.height() * 1.4f))
+    }
+
+    private fun signature(bitmap: Bitmap, r: RectF): IntArray {
+        val step = 8
+        val x0 = r.left.toInt().coerceIn(0, width - 1); val x1 = r.right.toInt().coerceIn(x0 + 1, width)
+        val y0 = r.top.toInt().coerceIn(0, height - 1); val y1 = r.bottom.toInt().coerceIn(y0 + 1, height)
+        val out = ArrayList<Int>()
+        var y = y0
+        while (y < y1) {
+            var x = x0
+            while (x < x1) {
+                val p = bitmap.getPixel(x, y)
+                out.add(((p shr 16 and 0xFF) + (p shr 8 and 0xFF) + (p and 0xFF)) / 3)
+                x += step
+            }
+            y += step
+        }
+        return out.toIntArray()
+    }
+
+    /** Our own covers are part of the captured screen, so OCR reads scraps of the original around them and the text
+     *  looks new on every scan. While the screen under a cover is unchanged we keep its track and ignore those
+     *  scraps; once it changes the track is released and read afresh. Returns true if some cover was released. */
+    private fun watchCovers(bitmap: Bitmap, frameDiff: Double?): Boolean {
+        var released = false
+        for (t in tracks) {
+            if (t.mode != OverlayView.COVER || !t.done || t.translation == null || t.seen < 2 || t.stale) continue
+            val inner = RectF(t.rect).apply { inset(width() * 0.1f, height() * 0.15f) }
+            val now = signature(bitmap, inner)
+            val was = t.sig
+            if (was == null) {
+                if (t.shownAt == 0L || SystemClock.uptimeMillis() - t.shownAt < COVER_SETTLE_MS) continue  // is it in the captured frame yet?
+                // First look since the cover was drawn. If the whole screen moved on in the meantime, what is
+                // under the cover is no longer what was translated.
+                if (frameDiff != null && frameDiff > 2.0) { t.stale = true; released = true } else t.sig = now
+            } else if (was.size != now.size || was.indices.sumOf { Math.abs(was[it] - now[it]) }.toDouble() / was.size > COVER_CHANGE) {
+                t.sig = null
+                t.stale = true
+                released = true
+            }
+        }
+        return released
     }
 
     /** A coarse brightness map of the screen, used to find empty space (of any colour) for translations. */
@@ -338,8 +415,9 @@ class CaptureService : Service() {
         else RectF(left, t.rect.top - h - 2, left + w, t.rect.top - 2)
     }
 
-    /** Mean brightness change of a sparse sample of pixels versus the previous scan (null on the first). */
-    private fun frameDiff(bitmap: Bitmap): Double? {
+    /** Mean brightness change of a sparse sample of pixels versus the previous scan (null on the first).
+     *  Second value: the same without the places our own overlay occupies, i.e. how much the screen itself changed. */
+    private fun frameDiff(bitmap: Bitmap): Pair<Double, Double>? {
         val stepX = 16
         val stepY = 16
         val cols = width / stepX
@@ -352,9 +430,20 @@ class CaptureService : Service() {
         val old = previous
         previous = sample
         if (old == null || old.size != sample.size) return null
+        val own = tracks.filter { it.seen >= 2 && it.done && it.translation != null }
+            .map { if (it.mode == OverlayView.COVER) coverRect(it) else sideRect(it) }
         var sum = 0L
-        for (i in sample.indices) sum += Math.abs(sample[i] - old[i])
-        return sum.toDouble() / sample.size
+        var outside = 0L
+        var outsideCount = 0
+        for (r in 0 until rows) for (c in 0 until cols) {
+            val i = r * cols + c
+            val d = Math.abs(sample[i] - old[i])
+            sum += d
+            val x = (c * stepX).toFloat()
+            val y = (r * stepY).toFloat()
+            if (own.none { it.contains(x, y) }) { outside += d; outsideCount++ }
+        }
+        return sum.toDouble() / sample.size to (if (outsideCount > 0) outside.toDouble() / outsideCount else 0.0)
     }
 
     private fun process(bitmap: Bitmap): Boolean {
@@ -372,13 +461,17 @@ class CaptureService : Service() {
         val old = tracks
         val used = HashSet<Track>()
         val fresh = ArrayList<Track>()
+        val held = old.filter { it.mode == OverlayView.COVER && it.sig != null && !it.stale }  // text under our own cover, unchanged
+        val heldRects = held.map { it to coverRect(it) }
         for (b in blocks) {
-            val t = old.filter { it !in used }.firstOrNull { iou(it.rect, b.rect) > 0.5f && similar(it.text, b.text) }
+            val t = old.filter { it !in used }.firstOrNull { sameBlock(it, b) }
+            if (t == null && heldRects.any { (_, r) -> r.contains(b.rect.centerX(), b.rect.centerY()) }) continue  // scraps around our own cover
             if (t != null) {
                 used += t
                 t.seen++
                 t.missed = 0
-                if (!samePlace(t.rect, b.rect)) {
+                if (t.stale) { t.stale = false; t.shownAt = 0L }
+                if (!samePlace(t.rect, b.rect, maxOf(t.lineHeight, b.lineHeight))) {
                     t.rect = b.rect
                     t.lineHeight = b.lineHeight
                 }
@@ -388,8 +481,9 @@ class CaptureService : Service() {
             }
         }
         val carried = old.filter { it !in used }.onEach { it.missed++ }
-            .filter { staticScreen && it.seen >= 2 && it.missed <= 1 }
+            .filter { it in held || (staticScreen && it.seen >= 2 && it.missed <= 1) }
         tracks = fresh + carried
+        Log.d(TAG, "scan blocks=${blocks.size} tracks=${tracks.size} unconfirmed=${tracks.count { it.seen < 2 }}")
 
         for (t in tracks) cache[t.text]?.let { t.translation = it.ifEmpty { null }; t.done = true }
         publish()
@@ -412,10 +506,15 @@ class CaptureService : Service() {
 
     @Synchronized
     private fun publish() {
-        val visible = tracks.filter { it.seen >= 2 && it.done && it.translation != null }
-        for (t in visible) if (t.mode < 0) t.mode = place(t, tracks)
+        val visible = tracks.filter { it.seen >= 2 && it.done && it.translation != null && !it.stale }
+        // Top to bottom, not in the order the translations happened to finish: the same screen always gets the same layout.
+        for (t in visible) if (t.shownAt == 0L) t.shownAt = SystemClock.uptimeMillis()
+        for (t in visible.filter { it.mode < 0 }.sortedWith(compareBy({ it.rect.top }, { it.rect.left }))) t.mode = place(t, tracks)
         val covering = visible.any { it.mode == OverlayView.COVER }
         main.post { chip?.visibility = if (covering) android.view.View.VISIBLE else android.view.View.GONE }
+        Log.d(TAG, "publish tracks=${tracks.size} visible=${visible.size} " +
+            "above=${visible.count { it.mode == OverlayView.ABOVE }} below=${visible.count { it.mode == OverlayView.BELOW }} " +
+            "cover=${visible.count { it.mode == OverlayView.COVER }}")
         shown = visible.map { TextRules.normalize(it.translation!!) }
         overlay?.boxes = visible.map { OverlayView.Box(it.rect, it.translation!!, it.lineHeight, it.mode) }
     }
@@ -457,9 +556,21 @@ class CaptureService : Service() {
         return if (union > 0) inter / union else 0f
     }
 
-    private fun samePlace(a: RectF, b: RectF) =
-        Math.abs(a.left - b.left) <= 8 && Math.abs(a.top - b.top) <= 8 &&
-            Math.abs(a.width() - b.width()) <= 12 && Math.abs(a.height() - b.height()) <= 12
+    /** The block seen now is the earlier one: nearly the same text, and in (nearly) the same place. */
+    private fun sameBlock(t: Track, b: Block): Boolean {
+        val lh = maxOf(t.lineHeight, b.lineHeight)
+        val near = iou(t.rect, b.rect) > 0.3f ||
+            (Math.abs(t.rect.centerX() - b.rect.centerX()) <= 2 * lh && Math.abs(t.rect.centerY() - b.rect.centerY()) <= 1.5f * lh)
+        return near && similar(t.text, b.text)
+    }
+
+    /** OCR boxes wobble by a few pixels from scan to scan, more on a dense phone screen: only a move of
+     *  about half a text line counts, so a translation does not shiver while the screen is still. */
+    private fun samePlace(a: RectF, b: RectF, lineHeight: Float): Boolean {
+        val tol = maxOf(8f, 0.5f * lineHeight)
+        return Math.abs(a.left - b.left) <= tol && Math.abs(a.top - b.top) <= tol &&
+            Math.abs(a.width() - b.width()) <= 1.5f * tol && Math.abs(a.height() - b.height()) <= 1.5f * tol
+    }
 
     /** Nearly the same text (OCR reads the same words slightly differently on every scan). */
     private fun similar(a: String, b: String, threshold: Double = 0.8): Boolean {

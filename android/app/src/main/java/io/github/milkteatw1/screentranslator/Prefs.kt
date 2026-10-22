@@ -35,6 +35,10 @@ class Prefs(context: Context) {
         get() = sp.getInt("speechLang", 0).coerceIn(0, VoskModels.languages.lastIndex)
         set(v) = sp.edit().putInt("speechLang", v).apply()
 
+    var lastUpdateCheck: Long
+        get() = sp.getLong("lastUpdateCheck", 0)
+        set(v) = sp.edit().putLong("lastUpdateCheck", v).apply()
+
     val speechLanguage get() = VoskModels.languages[speechLang]
     val sourceLang get() = Langs.sources[source]
     val targetLang get() = Langs.targets[target]

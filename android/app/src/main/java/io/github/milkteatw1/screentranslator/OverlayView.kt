@@ -19,6 +19,7 @@ class OverlayView(context: Context) : View(context) {
         const val ABOVE = 0
         const val BELOW = 1
         const val COVER = 2  // no free space near the text: the translation is laid over it
+        private const val MIN_COVER_SP = 10f  // smallest text size when fitting a translation over its original
     }
 
     @Volatile
@@ -98,17 +99,31 @@ class OverlayView(context: Context) : View(context) {
 
     /** No free space near the text: the translation is laid over it, shrunk to fit the same area. */
     private fun drawCover(canvas: Canvas, b: Box) {
-        val w = b.src.width().coerceAtLeast(40 * density)
+        // A short label (a button, a menu item) gets some room to the sides, so its translation does not
+        // wrap one character per line; the box stays centred on the original.
+        val natural = measure(b).first
+        val w = maxOf(b.src.width(), minOf(natural, b.src.width() * 1.6f, width - 16f)).coerceAtLeast(40 * density)
+        val left = if (w <= b.src.width() + 1f) b.src.left else (b.src.centerX() - w / 2).coerceIn(0f, maxOf(0f, width - w))
         var size = idealSize(b)
         var layout = layoutFor(b, w, size)
-        while (layout.height + 8 > b.src.height() && size > 11 * density) {
-            size -= density
+        // Small screens leave little room: shrink the text to fit the original's area...
+        while (layout.height + 8 > b.src.height() && size > MIN_COVER_SP * density) {
+            size -= density / 2
             layout = layoutFor(b, w, size)
         }
+        // ...and never grow past 1.4x its height, so one translation cannot bury the lines below it.
+        val maxHeight = b.src.height() * 1.4f
+        if (layout.height + 8 > maxHeight) {
+            val lines = ((maxHeight - 8) / (layout.height.toFloat() / layout.lineCount)).toInt().coerceAtLeast(1)
+            ink.textSize = size
+            layout = StaticLayout.Builder.obtain(b.text, 0, b.text.length, ink, (w - 12).toInt().coerceAtLeast(1))
+                .setAlignment(Layout.Alignment.ALIGN_NORMAL).setMaxLines(lines)
+                .setEllipsize(android.text.TextUtils.TruncateAt.END).build()
+        }
         val h = maxOf(b.src.height(), layout.height + 8f)
-        canvas.drawRoundRect(RectF(b.src.left, b.src.top, b.src.left + w, b.src.top + h), 8f, 8f, cover)
+        canvas.drawRoundRect(RectF(left, b.src.top, left + w, b.src.top + h), 8f, 8f, cover)
         canvas.save()
-        canvas.translate(b.src.left + 6, b.src.top + 4)
+        canvas.translate(left + 6, b.src.top + 4)
         layout.draw(canvas)
         canvas.restore()
     }

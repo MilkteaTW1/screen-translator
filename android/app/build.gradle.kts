@@ -11,8 +11,8 @@ android {
         applicationId = "io.github.milkteatw1.screentranslator"
         minSdk = 26
         targetSdk = 34
-        versionCode = 2
-        versionName = "0.4.0"
+        versionCode = 3
+        versionName = "0.5.0"
     }
 
     buildTypes {
@@ -51,4 +51,5 @@ dependencies {
     // Offline speech recognition (models are downloaded on demand, after the user agrees).
     implementation("com.alphacephei:vosk-android:0.3.47")
     testImplementation("junit:junit:4.13.2")
+    testImplementation("org.json:json:20231013")  // the Android one is only a stub in unit tests
 }

@@ -38,6 +38,15 @@ DEFAULTS = {
 }
 MAX_BLOCKS = 40  # most text blocks translated per screen pass
 BATCH = 5  # blocks translated between overlay refreshes
+POLL = 0.08  # seconds between cheap looks at the screen (grab + compare is ~30 ms); a scan starts when it changed
+CONFIRM_GAP = 0.1  # seconds before the second look that confirms newly seen text
+
+
+def scan_due(changed, dirty, since_last, interval):
+    """Whether to OCR now. A new or changed screen is scanned at once if it has been quiet for `interval`
+    (that setting only limits how often a constantly changing screen, like a video, is scanned);
+    text waiting for its confirming second look gets a short fixed gap."""
+    return (changed or dirty) and since_last >= (CONFIRM_GAP if dirty else interval)
 
 
 RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
@@ -123,7 +132,7 @@ class Worker(QObject):
         self.results.emit([])
 
     def _loop(self):
-        recognizer, prev = None, None
+        recognizer, prev, last_scan = None, None, 0.0
         pool = ThreadPoolExecutor(2)
         with mss.mss() as sct:
             mon = sct.monitors[1]
@@ -140,7 +149,8 @@ class Worker(QObject):
                     small = arr[::8, ::8, :3].astype(np.int16)
                     diff = None if prev is None or small.shape != prev.shape else float(np.abs(small - prev).mean())
                     self.static = diff is not None and diff < 2.0  # barely changed: not scrolling or playing video
-                    if diff is None or diff > 0.6 or self.dirty:
+                    changed = diff is None or diff > 0.6
+                    if scan_due(changed, self.dirty, time.monotonic() - last_scan, s["interval"]):
                         prev, self.dirty = small, False
                         gray = (arr[::4, ::4, :3].astype(np.int32) * (114, 587, 299)).sum(axis=2) // 1000  # B, G, R
                         self.background.emit((gray.astype(np.int16), self.origin))
@@ -148,9 +158,11 @@ class Worker(QObject):
                         self.status.emit(self._status_text())
                         # Text seen only once is not shown yet: look again soon to confirm it.
                         self.dirty = self.dirty or any(t["seen"] < 2 for t in self.tracks)
+                        last_scan = time.monotonic()
                 except Exception as e:  # keep the loop alive; show the problem in the UI
                     self.status.emit(f"Error: {e}")
-                time.sleep(min(0.4, s["interval"]) if self.dirty else s["interval"])
+                    time.sleep(1.0)  # do not retry a failing step 12 times a second
+                time.sleep(POLL)
 
     def _status_text(self):
         t = self.translator

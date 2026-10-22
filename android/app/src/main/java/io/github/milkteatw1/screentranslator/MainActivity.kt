@@ -107,6 +107,10 @@ class MainActivity : ComponentActivity() {
         status = TextView(this).apply { setPadding(0, pad / 2, 0, 0) }
         column.addView(toggle)
         column.addView(status)
+        column.addView(Button(this).apply {
+            text = "Check for updates (v${Updater.versionOf(this@MainActivity)})"
+            setOnClickListener { checkForUpdates(manual = true) }
+        })
         setContentView(ScrollView(this).apply { addView(column) })
 
         fun save() {
@@ -150,6 +154,56 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         refresh()
+        if (System.currentTimeMillis() - prefs.lastUpdateCheck > 12 * 3600_000L) checkForUpdates(manual = false)
+    }
+
+    private var downloaded: java.io.File? = null
+
+    /** Asks GitHub for a newer release; offers it if there is one. A manual check also says when there is none. */
+    private fun checkForUpdates(manual: Boolean) {
+        val pending = downloaded
+        if (manual && pending != null && pending.isFile) {  // already downloaded: the user came back from the settings page
+            if (Updater.install(this, pending)) return
+        }
+        Thread {
+            val update = try { Updater.check(Updater.versionOf(this)) } catch (e: Exception) {
+                runOnUiThread { if (manual) status.text = "Could not check for updates (no connection to GitHub)" }
+                return@Thread  // not recorded as a check: the next start-up tries again
+            }
+            prefs.lastUpdateCheck = System.currentTimeMillis()
+            runOnUiThread {
+                when {
+                    update != null -> offerUpdate(update)
+                    manual -> status.text = "Screen Translator is up to date"
+                }
+            }
+        }.start()
+    }
+
+    private fun offerUpdate(update: Updater.Update) {
+        val mb = if (update.size > 0) " (${update.size / 1_000_000} MB)" else ""
+        AlertDialog.Builder(this)
+            .setTitle("Update available")
+            .setMessage("Screen Translator ${update.version}$mb is available. Download it now? Android will ask you to confirm the install.")
+            .setPositiveButton("Update") { _, _ -> downloadUpdate(update) }
+            .setNegativeButton("Later", null)
+            .show()
+    }
+
+    private fun downloadUpdate(update: Updater.Update) {
+        status.text = "Downloading update 0%"
+        Thread {
+            try {
+                val file = Updater.download(this, update) { pct -> runOnUiThread { status.text = "Downloading update $pct%" } }
+                downloaded = file
+                runOnUiThread {
+                    status.text = if (Updater.install(this, file)) "Update downloaded"
+                    else "Allow installs from Screen Translator, then tap \"Check for updates\" again"
+                }
+            } catch (e: Exception) {
+                runOnUiThread { status.text = "Update download failed: ${e.message}" }
+            }
+        }.start()
     }
 
     private fun refresh() {

@@ -51,7 +51,15 @@ Chinese/Japanese/Korean text recognition models are fetched by Google Play servi
 2. Allow *Display over other apps*, then press Start again, and allow screen capture.
 3. In the capture dialog choose **Share entire screen** (not "one app"). A notification lets you stop it.
 
-The translation is drawn above each text block, centred, and proper nouns are left alone. The source is in
+The translation is drawn in free space next to its text block when there is some; on a small, crowded screen it
+is laid over the original instead, shrunk to fit. Proper nouns are left alone.
+
+**Updates**: the app checks GitHub for a newer release when you open it (at most every 12 hours) and from the
+*Check for updates* button. It downloads the APK and hands it to Android's installer; Android always asks you to
+confirm, and the first time you must allow *Install unknown apps* for Screen Translator. Updates only install over
+a copy signed with the same key, so keep installing the APKs from the Releases page.
+
+The source is in
 [`android/`](android) (Kotlin; build with Gradle and JDK 17). The APK is signed with the debug key, so it installs by
 sideloading; Traditional Chinese output converts ML Kit's Simplified Chinese with ICU.
 
@@ -145,7 +153,13 @@ MIT
 2. 允許「顯示在其他應用程式上層」,再按一次 Start,並允許螢幕擷取。
 3. 擷取視窗請選 **分享整個螢幕**(不要選「單一應用程式」)。通知欄可以隨時停止。
 
-譯文會顯示在每個文字區塊正上方並置中,專有名詞不翻譯。原始碼在 [`android/`](android)(Kotlin,用 Gradle 與 JDK 17 建置)。
+譯文有空白處就顯示在文字區塊旁邊;畫面小又擠的時候,會縮小字體直接蓋在原文上。專有名詞不翻譯。
+
+**更新**:開啟 App 時(最多每 12 小時一次)和按「Check for updates」都會到 GitHub 檢查新版,下載 APK 後交給
+Android 安裝程式。安裝一定要你按確認,第一次還需要允許 Screen Translator「安裝未知應用程式」。只有簽章相同的 APK
+才能覆蓋安裝,所以請一律從 Releases 頁面下載。
+
+原始碼在 [`android/`](android)(Kotlin,用 Gradle 與 JDK 17 建置)。
 APK 以 debug 金鑰簽署,可直接側載安裝;繁體中文是把 ML Kit 的簡體輸出用 ICU 轉換而來。
 
 ## 從原始碼執行
