@@ -22,7 +22,7 @@ from PySide6.QtWidgets import (
 from . import ocr
 from .overlay import CaptionOverlay, CoverChip, Overlay
 from .speech import MODELS, SpeechWorker, download_model, find_model, import_model
-from . import __version__, packs, updater
+from . import __version__, llm_setup, packs, updater
 from .translator import (
     LANGUAGES, Translator, install_pack, looks_like_source, missing_pairs, needed_pairs, ocr_tag_to_code,
 )
@@ -259,6 +259,7 @@ class Panel(QWidget):
     speech_model_done = Signal(bool)
     update_found = Signal(str, str)
     update_ready = Signal(str)
+    llm_done = Signal(bool)
 
     def __init__(self, worker, overlay, langs, speech=None, captions=None):
         super().__init__()
@@ -301,6 +302,7 @@ class Panel(QWidget):
         self.llm.setChecked(s["llm_enabled"])
         self.llm_url = QLineEdit(s["llm_url"])
         self.llm_model = QLineEdit(s["llm_model"])
+        self.llm_install = QPushButton("Install automatically (Ollama + model)")
         self.speech_enabled = QCheckBox("Translate speech: list what is heard at the bottom of the screen")
         self.speech_enabled.setChecked(s["speech_enabled"])
         self.speech_source = QComboBox()
@@ -344,6 +346,7 @@ class Panel(QWidget):
         llm_form.addRow("Server URL", self.llm_url)
         llm_form.addRow("Model", self.llm_model)
         lay.addLayout(llm_form)
+        lay.addWidget(self.llm_install)
         lay.addWidget(self.speech_enabled)
         speech_form = QFormLayout()
         speech_form.addRow("Audio from", self.speech_source)
@@ -363,6 +366,8 @@ class Panel(QWidget):
         self.pack_finished.connect(self._packs_ready)
         self.update_found.connect(self._offer_update)
         self.update_ready.connect(self._run_installer)
+        self.llm_done.connect(self._llm_installed)
+        self.llm_install.clicked.connect(self.install_llm)
         self.interval.valueChanged.connect(self.apply)
         self.hide_capture.toggled.connect(self.apply)
         self.skip_names.toggled.connect(self.apply)
@@ -461,6 +466,38 @@ class Panel(QWidget):
         except Exception as e:
             self.pack_status.emit(f"Download failed: {e}")
         self.pack_finished.emit()
+
+    def install_llm(self):
+        url, model = self.llm_url.text().strip(), self.llm_model.text().strip()
+        if not llm_setup.is_local(url):
+            self.state.setText("Automatic install only works for a server on this computer (localhost)")
+            return
+        box = QMessageBox(self)
+        box.setWindowTitle("Install local LLM")
+        box.setText("This installs Ollama (about 1.6 GB) if it is missing, then downloads the model "
+                    f"\"{model}\" (several GB). It needs a good amount of free disk space and RAM, "
+                    "and can take a while. Everything stays on this computer.")
+        yes = box.addButton("Install", QMessageBox.AcceptRole)
+        box.addButton("Not now", QMessageBox.RejectRole)
+        box.exec()
+        if box.clickedButton() is not yes:
+            return
+        self.llm_install.setEnabled(False)
+
+        def run():
+            try:
+                llm_setup.setup(url, model, self.pack_status.emit)
+                self.pack_status.emit("Local LLM ready")
+                self.llm_done.emit(True)
+            except Exception as e:
+                self.pack_status.emit(f"LLM install failed: {e}")
+                self.llm_done.emit(False)
+        threading.Thread(target=run, daemon=True).start()
+
+    def _llm_installed(self, ok):
+        self.llm_install.setEnabled(True)
+        if ok:
+            self.llm.setChecked(True)
 
     def check_for_updates(self, quiet=True):
         """Look for a newer release in the background; offers it if there is one."""
