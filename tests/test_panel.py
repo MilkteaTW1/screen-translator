@@ -44,3 +44,22 @@ def test_scan_schedule():
     assert not due(False, False, 99.0, 1.0)  # nothing changed: no scan
     assert due(False, True, appmod.CONFIRM_GAP, 5.0)  # text waiting for confirmation: short gap, not the interval
     assert not due(False, True, 0.01, 5.0)
+
+
+def test_language_button_switches_every_label_and_is_remembered(monkeypatch, tmp_path):
+    qapp = QApplication.instance() or QApplication([])
+    monkeypatch.setattr(appmod, "SETTINGS_PATH", tmp_path / "settings.json")
+    monkeypatch.setattr(appmod, "set_autostart", lambda on: None)
+    panel = appmod.Panel(appmod.Worker(appmod.LANGUAGES), _Overlay(), appmod.LANGUAGES)
+    assert panel.toggle.text() == "Start" and panel.tabs.tabText(0) == "Translate"
+    panel._fill_language_menu()
+    names = [a.text() for a in panel.language_button.menu().actions()]
+    assert names[:2] == ["English", "繁體中文"]
+    panel.set_language("zh-TW")
+    assert panel.toggle.text() == "開始" and panel.tabs.tabText(0) == "翻譯"
+    assert "繁體中文" in panel.language_button.text()
+    assert panel.skip_names.text().startswith("略過")
+    assert panel.speech_source.itemText(1) == "麥克風"
+    assert appmod.json.loads((tmp_path / "settings.json").read_text(encoding="utf-8"))["ui_language"] == "zh-TW"
+    panel.set_language("en")
+    assert panel.toggle.text() == "Start"

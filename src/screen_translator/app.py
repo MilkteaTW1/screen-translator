@@ -18,14 +18,15 @@ import numpy as np
 from PySide6.QtCore import QObject, Qt, QTimer, Signal
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
-    QApplication, QCheckBox, QFileDialog, QComboBox, QDoubleSpinBox, QFormLayout, QLabel, QLineEdit, QMenu, QMessageBox,
-    QPlainTextEdit, QPushButton, QSystemTrayIcon, QVBoxLayout, QWidget,
+    QApplication, QCheckBox, QFileDialog, QComboBox, QDoubleSpinBox, QFormLayout, QGroupBox, QHBoxLayout, QLabel,
+    QLineEdit, QMenu, QMessageBox, QPlainTextEdit, QPushButton, QSystemTrayIcon, QTabWidget, QVBoxLayout, QWidget,
 )
 
 from . import ocr
 from .overlay import CaptionOverlay, CoverChip, Overlay
-from .speech import MODELS, SpeechWorker, download_model, find_model, import_model
-from . import __version__, llm_setup, packs, updater
+from .speech import MODELS, SpeechWorker, download_model, ensure_streams, find_model, import_model
+from . import __version__, i18n, llm_setup, packs, updater
+from .i18n import t
 from .translator import (
     LANGUAGES, Translator, install_pack, looks_like_source, missing_pairs, needed_pairs, ocr_tag_to_code,
 )
@@ -38,6 +39,7 @@ DEFAULTS = {
     "autostart": False, "start_on_launch": False,
     "speech_enabled": False, "speech_source": "system", "speech_model": "base", "speech_lang": "auto",
     "llm_enabled": False, "llm_url": "http://localhost:11434/v1", "llm_model": "qwen2.5:7b",
+    "ui_language": "",  # interface language; empty = the one Windows is set to
 }
 MAX_BLOCKS = 40  # most text blocks translated per screen pass
 BATCH = 8  # blocks translated together (one engine call) and shown together
@@ -162,7 +164,7 @@ class Worker(QObject):
                         self.dirty = self.dirty or any(t["seen"] < 2 for t in self.tracks)
                         last_scan = time.monotonic()
                 except Exception as e:  # keep the loop alive; show the problem in the UI
-                    self.status.emit(f"Error: {e}")
+                    self.status.emit(t("status_error", err=e))
                     time.sleep(1.0)  # do not retry a failing step 12 times a second
                 time.sleep(POLL)
 
@@ -170,8 +172,8 @@ class Worker(QObject):
         t = self.translator
         if t.missing_packs:
             need = ", ".join(f"{a}→{b}" for a, b in sorted(t.missing_packs))
-            return f"Offline packs needed: {need} (run scripts/download_packs.py)"
-        return "Running (local LLM)" if t.engine == "llm" else "Running (offline)"
+            return i18n.t("status_packs_needed", names=need)
+        return i18n.t("status_running_llm" if t.engine == "llm" else "status_running_offline")
 
     def _process(self, recognizer, shot, s):
         glossary = [t.strip() for t in s["glossary"].splitlines() if t.strip()]
@@ -274,6 +276,7 @@ class Panel(QWidget):
     update_found = Signal(str, str)
     update_ready = Signal(str)
     llm_done = Signal(bool)
+    language_changed = Signal()
 
     def __init__(self, worker, overlay, langs, speech=None, captions=None):
         super().__init__()
@@ -282,8 +285,10 @@ class Panel(QWidget):
         self.langs = langs
         self.downloading = False
         self.setWindowTitle("Screen Translator")
-        self.setMinimumWidth(380)
+        self.setMinimumWidth(420)
         s = worker.settings
+        self.ui_language = s["ui_language"]
+        self._texts = []  # (setter, key) pairs, re-applied when the interface language changes
 
         self.source = QComboBox()
         installed = ocr.available_languages()
@@ -300,78 +305,126 @@ class Panel(QWidget):
         self.interval.setSingleStep(0.05)
         self.interval.setSuffix(" s")
         self.interval.setValue(s["interval"])
-        self.auto = QCheckBox("Auto-detect proper nouns (Capitalized / ALL CAPS / CamelCase)")
-        self.auto.setChecked(s["auto_proper"])
-        self.kata = QCheckBox("Japanese: keep ALL katakana untranslated (also loanwords like タワー)")
-        self.kata.setChecked(s["keep_katakana"])
-        self.hide_capture = QCheckBox("Hide translations from screenshots")
-        self.hide_capture.setChecked(s["hide_from_capture"])
-        self.skip_names = QCheckBox("Skip names and one-word labels (e.g. Bill Gates, Premium)")
-        self.skip_names.setChecked(s["skip_names"])
-        self.autostart = QCheckBox("Start with Windows (in the tray)")
-        self.autostart.setChecked(s["autostart"])
-        self.start_on_launch = QCheckBox("Start translating as soon as the app opens")
-        self.start_on_launch.setChecked(s["start_on_launch"])
-        self.llm = QCheckBox("Better quality: use a local LLM server (Ollama / LM Studio)")
-        self.llm.setChecked(s["llm_enabled"])
+        self.auto = self._check("auto_proper", s["auto_proper"])
+        self.kata = self._check("keep_katakana", s["keep_katakana"])
+        self.hide_capture = self._check("hide_capture", s["hide_from_capture"])
+        self.skip_names = self._check("skip_names", s["skip_names"])
+        self.autostart = self._check("autostart", s["autostart"])
+        self.start_on_launch = self._check("start_on_launch", s["start_on_launch"])
+        self.llm = self._check("llm_enable", s["llm_enabled"])
         self.llm_url = QLineEdit(s["llm_url"])
         self.llm_model = QLineEdit(s["llm_model"])
-        self.llm_install = QPushButton("Install automatically (Ollama + model)")
-        self.speech_enabled = QCheckBox("Translate speech: list what is heard at the bottom of the screen")
-        self.speech_enabled.setChecked(s["speech_enabled"])
+        self.llm_install = QPushButton()
+        self._text(self.llm_install.setText, "llm_install")
+        self.speech_enabled = self._check("speech_enable", s["speech_enabled"])
         self.speech_source = QComboBox()
-        self.speech_source.addItem("System audio (what the computer plays)", "system")
-        self.speech_source.addItem("Microphone", "mic")
-        self._select(self.speech_source, s["speech_source"])
+        self.speech_source.addItem("", "system")
+        self.speech_source.addItem("", "mic")
         self.speech_model = QComboBox()
-        for name, mb in MODELS.items():
-            self.speech_model.addItem(f"{name} (about {mb} MB)", name)
-        self._select(self.speech_model, s["speech_model"])
+        for name in MODELS:
+            self.speech_model.addItem(name, name)
         self.speech_lang = QComboBox()
-        self.speech_lang.addItem("Auto-detect", "auto")
+        self.speech_lang.addItem("", "auto")
         seen = set()
         for name, code in sorted(langs.items()):
             base = code.split("-")[0]
             if base not in seen:
                 seen.add(base)
                 self.speech_lang.addItem(name.title(), base)
+        self._select(self.speech_source, s["speech_source"])
+        self._select(self.speech_model, s["speech_model"])
         self._select(self.speech_lang, s["speech_lang"])
         self.speech_state = QLabel("")
         self.glossary = QPlainTextEdit(s["glossary"])
-        self.glossary.setPlaceholderText("Never translate these (one per line)\ne.g. Hatsune Miku\nNVIDIA")
-        self.toggle = QPushButton("Start")
+        self.toggle = QPushButton()
         self.toggle.clicked.connect(self.on_toggle)
-        self.state = QLabel("Stopped")
+        self.state = QLabel()
+        self.update_button = QPushButton()
+        self._text(self.update_button.setText, "check_updates")
+        self.update_button.clicked.connect(lambda: self.check_for_updates(quiet=False))
+        self.version_label = QLabel()
+        self._text(self.version_label.setText, "version_label", version=__version__)
+        self.language_button = QPushButton()
+        self.language_button.setMenu(QMenu(self.language_button))
+        self.language_button.menu().aboutToShow.connect(self._fill_language_menu)
 
+        # Settings are sorted into tabs by what they are for; Start/Stop and the status stay visible below them.
+        self.tabs = QTabWidget()
+        self.tabs.setUsesScrollButtons(False)
+        translate = QWidget()
         form = QFormLayout()
-        form.addRow("Screen language", self.source)
-        form.addRow("Translate to", self.target)
-        form.addRow("Refresh interval", self.interval)
-        lay = QVBoxLayout(self)
+        self._row(form, "screen_language", self.source)
+        self._row(form, "translate_to", self.target)
+        self._row(form, "refresh_interval", self.interval)
+        lay = QVBoxLayout(translate)
         lay.addLayout(form)
         lay.addWidget(self.hide_capture)
         lay.addWidget(self.skip_names)
-        lay.addWidget(self.auto)
-        lay.addWidget(self.kata)
-        lay.addWidget(self.autostart)
-        lay.addWidget(self.start_on_launch)
-        lay.addWidget(self.llm)
-        llm_form = QFormLayout()
-        llm_form.addRow("Server URL", self.llm_url)
-        llm_form.addRow("Model", self.llm_model)
-        lay.addLayout(llm_form)
-        lay.addWidget(self.llm_install)
+        lay.addStretch(1)
+        self._tab(translate, "tab_translate")
+
+        speech_tab = QWidget()
+        lay = QVBoxLayout(speech_tab)
         lay.addWidget(self.speech_enabled)
         speech_form = QFormLayout()
-        speech_form.addRow("Audio from", self.speech_source)
-        speech_form.addRow("Speech language", self.speech_lang)
-        speech_form.addRow("Speech model", self.speech_model)
+        self._row(speech_form, "audio_from", self.speech_source)
+        self._row(speech_form, "speech_language", self.speech_lang)
+        self._row(speech_form, "speech_model", self.speech_model)
         lay.addLayout(speech_form)
         lay.addWidget(self.speech_state)
-        lay.addWidget(QLabel("Do-not-translate list"))
-        lay.addWidget(self.glossary)
-        lay.addWidget(self.toggle)
-        lay.addWidget(self.state)
+        lay.addStretch(1)
+        self._tab(speech_tab, "tab_speech")
+
+        quality = QWidget()
+        lay = QVBoxLayout(quality)
+        names = QGroupBox()
+        self._text(names.setTitle, "group_names")
+        box = QVBoxLayout(names)
+        box.addWidget(self.auto)
+        box.addWidget(self.kata)
+        label = QLabel()
+        self._text(label.setText, "glossary_label")
+        box.addWidget(label)
+        box.addWidget(self.glossary)
+        lay.addWidget(names)
+        llm_box = QGroupBox()
+        self._text(llm_box.setTitle, "group_llm")
+        box = QVBoxLayout(llm_box)
+        box.addWidget(self.llm)
+        llm_form = QFormLayout()
+        self._row(llm_form, "llm_server_url", self.llm_url)
+        self._row(llm_form, "llm_model", self.llm_model)
+        box.addLayout(llm_form)
+        box.addWidget(self.llm_install)
+        lay.addWidget(llm_box)
+        lay.addStretch(1)
+        self._tab(quality, "tab_quality")
+
+        general = QWidget()
+        lay = QVBoxLayout(general)
+        startup = QGroupBox()
+        self._text(startup.setTitle, "group_startup")
+        box = QVBoxLayout(startup)
+        box.addWidget(self.autostart)
+        box.addWidget(self.start_on_launch)
+        lay.addWidget(startup)
+        app_box = QGroupBox()
+        self._text(app_box.setTitle, "group_app")
+        box = QVBoxLayout(app_box)
+        box.addWidget(self.update_button)
+        box.addWidget(self.version_label)
+        lay.addWidget(app_box)
+        lay.addStretch(1)
+        self._tab(general, "tab_general")
+
+        top = QHBoxLayout()
+        top.addStretch(1)
+        top.addWidget(self.language_button)
+        main = QVBoxLayout(self)
+        main.addLayout(top)
+        main.addWidget(self.tabs)
+        main.addWidget(self.toggle)
+        main.addWidget(self.state)
 
         for w in (self.source, self.target):
             w.currentIndexChanged.connect(self.apply)
@@ -406,9 +459,62 @@ class Panel(QWidget):
             speech.status.connect(self.speech_state.setText)
             speech.line.connect(captions.add)
 
+        self.retranslate()
+        self.state.setText(t("state_stopped"))
         if not installed:
-            self.state.setText("No OCR language packs installed in Windows")
+            self.state.setText(t("no_ocr"))
             self.toggle.setEnabled(False)
+
+    # -- interface language -------------------------------------------------------------------------------------
+    def _text(self, setter, key, **values):
+        """Show t(key) through setter now, and again whenever the interface language changes."""
+        self._texts.append((setter, key, values))
+        setter(t(key, **values))
+
+    def _check(self, key, checked):
+        box = QCheckBox()
+        box.setChecked(checked)
+        self._text(box.setText, key)
+        return box
+
+    def _row(self, form, key, widget):
+        label = QLabel()
+        self._text(label.setText, key)
+        form.addRow(label, widget)
+
+    def _tab(self, page, key):
+        index = self.tabs.addTab(page, "")
+        self._text(lambda text, i=index: self.tabs.setTabText(i, text), key)
+
+    def retranslate(self):
+        for setter, key, values in self._texts:
+            setter(t(key, **values))
+        self.glossary.setPlaceholderText(t("glossary_placeholder"))
+        self.speech_source.setItemText(0, t("audio_system"))
+        self.speech_source.setItemText(1, t("audio_mic"))
+        self.speech_lang.setItemText(0, t("auto_detect"))
+        for i, (name, mb) in enumerate(MODELS.items()):
+            self.speech_model.setItemText(i, t("model_size", name=name, mb=mb))
+        shown = dict(i18n.available()).get(i18n.current, i18n.current)
+        self.language_button.setText(t("language_button", name=shown))
+        self.toggle.setText(t("stop" if self.worker.running else "start"))
+
+    def _fill_language_menu(self):
+        menu = self.language_button.menu()
+        menu.clear()
+        for code, name in i18n.available():
+            action = menu.addAction(name)
+            action.setCheckable(True)
+            action.setChecked(code == i18n.current)
+            action.triggered.connect(lambda _=False, code=code: self.set_language(code))
+
+    def set_language(self, code):
+        self.ui_language = code
+        i18n.load(code)
+        self.retranslate()
+        self.state.setText(t("state_stopped" if not self.worker.running else "status_running_offline"))
+        self.language_changed.emit()
+        self.apply()
 
     @staticmethod
     def _select(combo, data):
@@ -427,6 +533,7 @@ class Panel(QWidget):
             "llm_url": self.llm_url.text().strip(), "llm_model": self.llm_model.text().strip(),
             "speech_enabled": self.speech_enabled.isChecked(), "speech_source": self.speech_source.currentData(),
             "speech_model": self.speech_model.currentData(), "speech_lang": self.speech_lang.currentData(),
+            "ui_language": self.ui_language,
         }
 
     def apply(self, *_):
@@ -452,21 +559,20 @@ class Panel(QWidget):
             return
         names = ", ".join(f"{a} → {b}" for a, b in missing)
         box = QMessageBox(self)
-        box.setWindowTitle("Language packs")
-        box.setText(f"Translating this pair offline needs: {names}\n"
-                    "Each pack is a one-time download of about 50-100 MB. How do you want to get it?")
-        download = box.addButton("Download now", QMessageBox.AcceptRole)
-        have_file = box.addButton("I have the file...", QMessageBox.ActionRole)
-        box.addButton("Not now", QMessageBox.RejectRole)
+        box.setWindowTitle(t("packs_title"))
+        box.setText(t("packs_text", names=names))
+        download = box.addButton(t("btn_download"), QMessageBox.AcceptRole)
+        have_file = box.addButton(t("btn_have_file"), QMessageBox.ActionRole)
+        box.addButton(t("btn_not_now"), QMessageBox.RejectRole)
         box.exec()
         if box.clickedButton() is have_file:
-            for path in QFileDialog.getOpenFileNames(self, "Pick .argosmodel file(s)", "", "Argos packs (*.argosmodel)")[0]:
+            for path in QFileDialog.getOpenFileNames(self, t("pick_packs"), "", "Argos packs (*.argosmodel)")[0]:
                 packs.import_file(path)
             self._packs_ready()
-            self.state.setText("Language packs imported")
+            self.state.setText(t("packs_imported"))
             return
         if box.clickedButton() is not download:
-            self.state.setText(f"Offline packs needed: {names}")
+            self.state.setText(t("packs_needed", names=names))
             return
         self.downloading = True
         threading.Thread(target=self._download, args=(missing,), daemon=True).start()
@@ -474,25 +580,23 @@ class Panel(QWidget):
     def _download(self, pairs):
         try:
             for a, b in pairs:
-                self.pack_status.emit(f"Downloading language pack {a} → {b} ...")
-                install_pack(a, b, lambda pct, a=a, b=b: self.pack_status.emit(f"Downloading {a} → {b}: {pct}%"))
-            self.pack_status.emit("Language packs installed")
+                self.pack_status.emit(t("pack_downloading", a=a, b=b))
+                install_pack(a, b, lambda pct, a=a, b=b: self.pack_status.emit(t("pack_progress", a=a, b=b, pct=pct)))
+            self.pack_status.emit(t("packs_installed"))
         except Exception as e:
-            self.pack_status.emit(f"Download failed: {e}")
+            self.pack_status.emit(t("download_failed", err=e))
         self.pack_finished.emit()
 
     def install_llm(self):
         url, model = self.llm_url.text().strip(), self.llm_model.text().strip()
         if not llm_setup.is_local(url):
-            self.state.setText("Automatic install only works for a server on this computer (localhost)")
+            self.state.setText(t("llm_local_only"))
             return
         box = QMessageBox(self)
-        box.setWindowTitle("Install local LLM")
-        box.setText("This installs Ollama (about 1.6 GB) if it is missing, then downloads the model "
-                    f"\"{model}\" (several GB). It needs a good amount of free disk space and RAM, "
-                    "and can take a while. Everything stays on this computer.")
-        yes = box.addButton("Install", QMessageBox.AcceptRole)
-        box.addButton("Not now", QMessageBox.RejectRole)
+        box.setWindowTitle(t("llm_title"))
+        box.setText(t("llm_text", model=model))
+        yes = box.addButton(t("btn_install"), QMessageBox.AcceptRole)
+        box.addButton(t("btn_not_now"), QMessageBox.RejectRole)
         box.exec()
         if box.clickedButton() is not yes:
             return
@@ -501,10 +605,10 @@ class Panel(QWidget):
         def run():
             try:
                 llm_setup.setup(url, model, self.pack_status.emit)
-                self.pack_status.emit("Local LLM ready")
+                self.pack_status.emit(t("llm_ready"))
                 self.llm_done.emit(True)
             except Exception as e:
-                self.pack_status.emit(f"LLM install failed: {e}")
+                self.pack_status.emit(t("llm_failed", err=e))
                 self.llm_done.emit(False)
         threading.Thread(target=run, daemon=True).start()
 
@@ -520,16 +624,15 @@ class Panel(QWidget):
             if found:
                 self.update_found.emit(found[0], found[1])
             elif not quiet:
-                self.pack_status.emit("Screen Translator is up to date")
+                self.pack_status.emit(t("up_to_date"))
         threading.Thread(target=run, daemon=True).start()
 
     def _offer_update(self, version, url):
         box = QMessageBox(self)
-        box.setWindowTitle("Update available")
-        box.setText(f"Screen Translator {version} is available (you have {__version__}).\n"
-                    "Download and install it now? The app will close while it installs.")
-        yes = box.addButton("Update now", QMessageBox.AcceptRole)
-        box.addButton("Later", QMessageBox.RejectRole)
+        box.setWindowTitle(t("update_title"))
+        box.setText(t("update_text", version=version, current=__version__))
+        yes = box.addButton(t("btn_update_now"), QMessageBox.AcceptRole)
+        box.addButton(t("btn_later"), QMessageBox.RejectRole)
         box.exec()
         if box.clickedButton() is not yes:
             return
@@ -537,9 +640,9 @@ class Panel(QWidget):
         def run():
             try:
                 self.update_ready.emit(updater.download(
-                    url, lambda pct: self.pack_status.emit(f"Downloading update: {pct}%")))
+                    url, lambda pct: self.pack_status.emit(t("update_progress", pct=pct))))
             except Exception as e:
-                self.pack_status.emit(f"Update download failed: {e}")
+                self.pack_status.emit(t("update_failed", err=e))
         threading.Thread(target=run, daemon=True).start()
 
     def _run_installer(self, path):
@@ -578,25 +681,24 @@ class Panel(QWidget):
     def _ask_model(self, name):
         """The speech model is a one-time download; the user decides how to get it."""
         box = QMessageBox(self)
-        box.setWindowTitle("Speech model")
-        box.setText(f"Speech translation needs the \"{name}\" speech model (about {MODELS[name]} MB, downloaded once, "
-                    "then everything runs offline). How do you want to get it?")
-        download = box.addButton("Download now", QMessageBox.AcceptRole)
-        have_folder = box.addButton("I have the model folder...", QMessageBox.ActionRole)
-        box.addButton("Not now", QMessageBox.RejectRole)
+        box.setWindowTitle(t("speech_model_title"))
+        box.setText(t("speech_model_text", name=name, mb=MODELS[name]))
+        download = box.addButton(t("btn_download"), QMessageBox.AcceptRole)
+        have_folder = box.addButton(t("btn_have_folder"), QMessageBox.ActionRole)
+        box.addButton(t("btn_not_now"), QMessageBox.RejectRole)
         box.exec()
         if box.clickedButton() is have_folder:
-            folder = QFileDialog.getExistingDirectory(self, "Pick a faster-whisper model folder (contains model.bin)")
+            folder = QFileDialog.getExistingDirectory(self, t("pick_model_folder"))
             try:
                 if not folder:
-                    raise RuntimeError("no folder picked")
+                    raise RuntimeError(t("no_folder"))
                 import_model(folder, name)
                 self.speech_model_done.emit(True)
             except Exception as e:
-                self.speech_state.setText(f"Could not use that folder: {e}")
+                self.speech_state.setText(t("speech_folder_failed", err=e))
                 self.speech_model_done.emit(False)
         elif box.clickedButton() is download:
-            self.speech_state.setText(f"Downloading the {name} speech model ...")
+            self.speech_state.setText(t("speech_downloading", name=name))
             threading.Thread(target=self._download_model, args=(name,), daemon=True).start()
         else:
             self.speech_model_done.emit(False)
@@ -606,7 +708,7 @@ class Panel(QWidget):
             download_model(name)
             self.speech_model_done.emit(True)
         except Exception as e:
-            self.pack_status.emit(f"Download failed: {e}")
+            self.pack_status.emit(t("download_failed", err=e))
             self.speech_model_done.emit(False)
 
     def _speech_model_done(self, ok):
@@ -621,14 +723,14 @@ class Panel(QWidget):
     def on_toggle(self):
         if self.worker.running:
             self.worker.stop()
-            self.toggle.setText("Start")
-            self.state.setText("Stopped")
+            self.toggle.setText(t("start"))
+            self.state.setText(t("state_stopped"))
         else:
             self.apply()
             self.ensure_packs()
             self.worker.start()
-            self.toggle.setText("Stop")
-            self.state.setText("Starting...")
+            self.toggle.setText(t("stop"))
+            self.state.setText(t("state_starting"))
 
     def showEvent(self, e):  # keep this window out of the screenshots too, so it never gets translated
         super().showEvent(e)
@@ -655,6 +757,8 @@ def prewarm(worker):
 
 def main():
     lower_priority()
+    ensure_streams()
+    i18n.load(load_settings()["ui_language"])
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)
     langs = LANGUAGES
@@ -680,19 +784,26 @@ def main():
 
     tray = QSystemTrayIcon(app.style().standardIcon(app.style().StandardPixmap.SP_ComputerIcon), app)
     menu = QMenu()
-    show = QAction("Settings", menu, triggered=panel.show)
-    toggle = QAction("Start / Stop", menu, triggered=panel.on_toggle)
-    shots = QAction("Let screenshots include translations", menu, checkable=True)
+    show = QAction(menu, triggered=panel.show)
+    toggle = QAction(menu, triggered=panel.on_toggle)
+    shots = QAction(menu, checkable=True)
     shots.setChecked(not panel.hide_capture.isChecked())
     shots.toggled.connect(lambda on: panel.hide_capture.setChecked(not on))
     panel.hide_capture.toggled.connect(lambda hide: shots.setChecked(not hide))
-    talk = QAction("Translate speech", menu, checkable=True)
+    talk = QAction(menu, checkable=True)
     talk.setChecked(panel.speech_enabled.isChecked())
     talk.toggled.connect(panel.speech_enabled.setChecked)
     panel.speech_enabled.toggled.connect(talk.setChecked)
-    update = QAction("Check for updates", menu, triggered=lambda: panel.check_for_updates(quiet=False))
-    quit_ = QAction("Quit", menu, triggered=app.quit)
+    update = QAction(menu, triggered=lambda: panel.check_for_updates(quiet=False))
+    quit_ = QAction(menu, triggered=app.quit)
     menu.addActions([show, toggle, talk, shots, update, quit_])
+
+    def retitle_tray():
+        for action, key in ((show, "tray_settings"), (toggle, "tray_toggle"), (talk, "tray_speech"),
+                            (shots, "tray_shots"), (update, "tray_update"), (quit_, "tray_quit")):
+            action.setText(t(key))
+    retitle_tray()
+    panel.language_changed.connect(retitle_tray)
     tray.setContextMenu(menu)
     tray.activated.connect(lambda r: panel.show() if r == QSystemTrayIcon.Trigger else None)
     tray.show()

@@ -27,6 +27,8 @@ Nothing is sent over the network and your normal use of the computer is not dist
 - Optional better quality: point it at a local LLM server (Ollama, LM Studio...) in the settings; falls back to
   the built-in model when the server is not running.
 - Configurable refresh interval (0 s and up; the real limit is OCR speed).
+- Settings are sorted into tabs (Translate, Speech, Quality, General). The interface starts in the language Windows is
+  set to and can be switched with the language button at the top of the window.
 
 ## Requirements
 
@@ -97,6 +99,8 @@ on many machines; see [docs/KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md).
 ```
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) and [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+To add an interface language, add one JSON file to [src/screen_translator/locales](src/screen_translator/locales); the
+[README there](src/screen_translator/locales/README.md) explains how.
 Help is wanted on everything in [docs/KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md).
 
 ## License
@@ -130,6 +134,7 @@ MIT
   可開機自動啟動並縮小到系統匣、啟動即開始翻譯。
 - 可選的更高品質:在設定中指定本機 LLM 伺服器(Ollama、LM Studio 等),伺服器沒開時自動退回內建模型。
 - 可自訂刷新間隔(0 秒起,實際速度受 OCR 速度限制)。
+- 設定依用途分成分頁(翻譯、語音、品質、一般);介面預設使用 Windows 的語言,可用視窗上方的語言按鈕切換。
 
 ## 系統需求
 
@@ -187,6 +192,8 @@ build.bat
 ```
 
 詳見 [CONTRIBUTING.md](CONTRIBUTING.md)、[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。
+想新增介面語言,只要在 [src/screen_translator/locales](src/screen_translator/locales) 加一個 JSON 檔,
+做法見[該資料夾的說明](src/screen_translator/locales/README.md)。
 歡迎協助 [docs/KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md) 裡列出的問題。
 
 ## 授權

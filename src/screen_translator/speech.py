@@ -13,6 +13,7 @@ from pathlib import Path
 import numpy as np
 from PySide6.QtCore import QObject, Signal
 
+from .i18n import t
 from .translator import Translator
 
 SAMPLE_RATE = 16000
@@ -49,8 +50,18 @@ def find_model(name):
     return None
 
 
+def ensure_streams():
+    """A windowed (no console) build has no stdout/stderr, and the download library's progress bar writes to
+    them ('NoneType' object has no attribute 'write'): give it somewhere to write."""
+    for name in ("stdout", "stderr"):
+        if getattr(sys, name) is None:
+            setattr(sys, name, open(os.devnull, "w", encoding="utf-8"))
+
+
 def download_model(name):
     """Download a model (needs internet; see MODELS for the size). Raises on failure."""
+    ensure_streams()
+    os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
     from huggingface_hub import snapshot_download
     MODEL_DIR.mkdir(parents=True, exist_ok=True)
     snapshot_download(f"Systran/faster-whisper-{name}", local_dir=str(MODEL_DIR / name),
@@ -149,13 +160,13 @@ class SpeechWorker(QObject):
                 device = sc.default_microphone()
             else:  # what the computer plays: the loopback of the default speakers
                 device = sc.get_microphone(sc.default_speaker().name, include_loopback=True)
-            self.status.emit("Listening...")
+            self.status.emit(t("speech_listening"))
             with device.recorder(samplerate=SAMPLE_RATE, channels=1, blocksize=CHUNK) as rec:
                 while self.running:
                     self.audio.put(rec.record(numframes=CHUNK)[:, 0].astype(np.float32))
         except Exception as e:
             self.running = False
-            self.status.emit(f"Audio error: {e}")
+            self.status.emit(t("speech_audio_error", err=e))
 
     def _segment(self):
         seg = Segmenter()
@@ -179,13 +190,13 @@ class SpeechWorker(QObject):
             path = find_model(self.settings["speech_model"])
             if path is None:
                 raise RuntimeError("speech model is not installed")
-            self.status.emit("Loading speech model...")
+            self.status.emit(t("speech_loading"))
             model = WhisperModel(str(path), device="cpu", compute_type="int8", cpu_threads=3)
         except Exception as e:
             self.running = False
-            self.status.emit(f"Speech model error: {e}")
+            self.status.emit(t("speech_model_error", err=e))
             return
-        self.status.emit("Listening...")
+        self.status.emit(t("speech_listening"))
         while self.running:
             try:
                 audio = self.utterances.get(timeout=0.5)
@@ -194,7 +205,7 @@ class SpeechWorker(QObject):
             try:
                 self._handle(model, audio)
             except Exception as e:
-                self.status.emit(f"Speech error: {e}")
+                self.status.emit(t("speech_error", err=e))
 
     def _handle(self, model, audio):
         s = self.settings
@@ -215,5 +226,5 @@ class SpeechWorker(QObject):
                 text, {"zh": "zh-CN"}.get(code, code), target, code, glossary, s["auto_proper"], s["keep_katakana"]) or ""
             if not translation and self.translator.missing_packs:
                 need = ", ".join(f"{a}→{b}" for a, b in sorted(self.translator.missing_packs))
-                self.status.emit(f"Language packs needed for speech: {need}")
+                self.status.emit(t("speech_packs_needed", names=need))
         self.line.emit(text, translation)
