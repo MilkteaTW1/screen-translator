@@ -31,7 +31,7 @@ class SpeechEngine(
     private val target: Lang,
     private val glossary: List<String>,
     private val useGoogle: Boolean,
-    private val onPartial: (String) -> Unit,
+    private val onPartial: (said: String, translation: String) -> Unit,
     private val onLine: (said: String, translation: String) -> Unit,
     private val onStatus: (String) -> Unit,
 ) {
@@ -39,12 +39,17 @@ class SpeechEngine(
         private const val TAG = "ScreenTranslator"
         private const val RATE = 16000
         private const val CHUNK = RATE / 10  // 0.1 s
+        private const val MAX_SENTENCE_MS = 7000L  // talk without a pause is cut here, so captions keep coming
+        private const val PARTIAL_EVERY_MS = 1500L  // the sentence still being spoken is translated this often
     }
 
     @Volatile private var running = false
     private var recorder: AudioRecord? = null
     private var translator: Translator? = null
     private val translating = Executors.newSingleThreadExecutor()
+    private val translatingPartial = Executors.newSingleThreadExecutor()
+    @Volatile private var partialBusy = false
+    @Volatile private var sentence = 0  // counts finished sentences: a late live translation of an old one is dropped
     private var hansHant: android.icu.text.Transliterator? = null
 
     /** [testFile]: a 16 kHz mono 16-bit WAV to feed instead of live audio (used to check the pipeline). */
@@ -76,7 +81,10 @@ class SpeechEngine(
             recorder = source
             source?.startRecording()
             onStatus("Listening...")
+            onPartial("🎧", "")  // listening: shown until something is heard
             val chunk = ShortArray(CHUNK)
+            var startedAt = 0L  // when the sentence being spoken began
+            var translatedAt = 0L
             val wav = testFile?.let { File(it).readBytes().drop(44).toByteArray() }
             var wavPos = 0
             var lastPartial = ""
@@ -95,13 +103,25 @@ class SpeechEngine(
                     n = source!!.read(chunk, 0, CHUNK)
                     if (n <= 0) continue
                 }
+                val now = android.os.SystemClock.uptimeMillis()
                 if (rec.acceptWaveForm(chunk, n)) {
                     handleFinal(text(rec.result, "text"))
                     lastPartial = ""
-                    onPartial("")
+                    startedAt = 0L
                 } else {
                     val partial = text(rec.partialResult, "partial")
-                    if (partial != lastPartial) { lastPartial = partial; onPartial(partial) }
+                    if (partial.isNotEmpty() && startedAt == 0L) startedAt = now
+                    if (startedAt != 0L && now - startedAt > MAX_SENTENCE_MS) {
+                        // Someone talking without a pause (a video, a stream) never reaches the end of a sentence:
+                        // close it here so it is translated and shown, and carry on with the next one.
+                        handleFinal(text(rec.finalResult, "text"))
+                        lastPartial = ""
+                        startedAt = 0L
+                    } else if (partial != lastPartial) {
+                        lastPartial = partial
+                        onPartial(partial, "")
+                        if (now - translatedAt > PARTIAL_EVERY_MS) { translatedAt = now; translateLive(partial) }
+                    }
                 }
             }
             if (testFile != null) handleFinal(text(rec.finalResult, "text"))
@@ -114,6 +134,8 @@ class SpeechEngine(
             model?.close()
             if (testFile != null) { translating.shutdown(); translating.awaitTermination(30, TimeUnit.SECONDS) }
             translator?.close()
+            translatingPartial.shutdown()
+            onPartial("", "")
         }
     }
 
@@ -123,22 +145,38 @@ class SpeechEngine(
     }
 
     private fun handleFinal(said: String) {
+        sentence++
+        onPartial("", "")
         if (said.length < 2) return
         if (translator == null) { onLine(said, ""); return }
-        translating.execute {
-            val shown = try {
-                val (protectedText, originals) = TextRules.protect(said, glossary, false)
-                var out = (if (useGoogle) GoogleTranslate.translate(protectedText, target) else null)
-                    ?: Tasks.await(translator!!.translate(protectedText), 20, TimeUnit.SECONDS)
-                out = TextRules.restore(out, originals)
-                if (target.traditional) out = hansHant?.transliterate(out) ?: out
-                out
-            } catch (e: Exception) {
-                Log.w(TAG, "speech translate failed: ${e.message}")
-                ""
+        translating.execute { onLine(said, translate(said)) }
+    }
+
+    /** The sentence still being spoken, translated now and then; only the newest is worked on. */
+    private fun translateLive(said: String) {
+        if (translator == null || said.length < 6 || partialBusy) return
+        partialBusy = true
+        val forSentence = sentence
+        translatingPartial.execute {
+            try {
+                val out = translate(said)
+                if (forSentence == sentence && out.isNotEmpty()) onPartial(said, out)
+            } finally {
+                partialBusy = false
             }
-            onLine(said, shown)
         }
+    }
+
+    private fun translate(said: String): String = try {
+        val (protectedText, originals) = TextRules.protect(said, glossary, false)
+        var out = (if (useGoogle) GoogleTranslate.translate(protectedText, target) else null)
+            ?: Tasks.await(translator!!.translate(protectedText), 20, TimeUnit.SECONDS)
+        out = TextRules.restore(out, originals)
+        if (target.traditional) out = hansHant?.transliterate(out) ?: out
+        out
+    } catch (e: Exception) {
+        Log.w(TAG, "speech translate failed: ${e.message}")
+        ""
     }
 
     @SuppressLint("MissingPermission")

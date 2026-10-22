@@ -73,4 +73,11 @@
     <string name="version">Version %1$s</string>
     <string name="check_updates_short">Check for updates</string>
     <string name="lang_short">EN</string>
+    <string name="screen_start">Translate the screen</string>
+    <string name="screen_stop">Stop screen translation</string>
+    <string name="speech_start">Translate speech</string>
+    <string name="speech_stop">Stop speech translation</string>
+    <string name="status_screen">Translating the screen</string>
+    <string name="status_speech">Translating speech</string>
+    <string name="status_both">Translating the screen and speech</string>
 </resources>

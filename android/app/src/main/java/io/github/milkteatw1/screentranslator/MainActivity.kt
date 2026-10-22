@@ -29,7 +29,8 @@ import io.github.milkteatw1.screentranslator.Ui.dp
 /** Settings screen: pick the languages, decide how language data is downloaded, start and stop. */
 class MainActivity : ComponentActivity() {
     private lateinit var prefs: Prefs
-    private lateinit var toggle: TextView
+    private lateinit var screenButton: TextView
+    private lateinit var speechButton: TextView
     private lateinit var status: TextView
 
     private val projectionLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { r ->
@@ -45,7 +46,32 @@ class MainActivity : ComponentActivity() {
     }
     private val notificationLauncher = registerForActivityResult(ActivityResultContracts.RequestPermission()) { askProjection() }
     private val micLauncher = registerForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
-        if (ok) askNotification() else status.text = getString(R.string.mic_needed)
+        when {
+            !ok -> status.text = getString(R.string.mic_needed)
+            pendingSpeechOn -> { pendingSpeechOn = false; setFeatures(CaptureService.screenOn, true) }
+            else -> askNotification()
+        }
+    }
+    private var pendingSpeechOn = false  // the microphone was asked for while the service already runs
+
+    /** Switches screen / speech translation on or off in the running service. */
+    private fun setFeatures(screen: Boolean, speech: Boolean) {
+        startService(Intent(this, CaptureService::class.java).setAction(CaptureService.ACTION_FEATURES)
+            .putExtra(CaptureService.EXTRA_SCREEN, screen).putExtra(CaptureService.EXTRA_SPEECH, speech))
+        status.postDelayed({ refresh() }, 500)
+    }
+
+    /** Starts the service with these features (stopping it first if it runs): asks for screen capture again. */
+    private fun restart(screen: Boolean, speech: Boolean) {
+        prefs.screenText = screen
+        prefs.speech = speech
+        val go = { ensureLanguageData { ensureSpeechModel { startFlow() } } }
+        if (CaptureService.running) {
+            startService(Intent(this, CaptureService::class.java).setAction(CaptureService.ACTION_STOP))
+            status.postDelayed({ go() }, 600)
+        } else {
+            go()
+        }
     }
 
     override fun attachBaseContext(base: Context) = super.attachBaseContext(Ui.localized(base))
@@ -105,7 +131,7 @@ class MainActivity : ComponentActivity() {
         }
         tabs.forEachIndexed { i, tab -> tab.setOnClickListener { showTab(i) } }
 
-        // Translate: languages and the screen.
+        // Translate: languages.
         val languages = Ui.card(ctx, getString(R.string.section_languages))
         languages.addView(Ui.label(ctx, getString(R.string.screen_language)))
         val source = Ui.spinner(ctx, Langs.sources.map { it.label }, prefs.source)
@@ -114,15 +140,9 @@ class MainActivity : ComponentActivity() {
         val target = Ui.spinner(ctx, Langs.targets.map { it.label }, prefs.target)
         languages.addView(target)
         pages[0].addView(languages)
-        val screenCard = Ui.card(ctx, getString(R.string.section_screen))
-        val screenBox = Ui.switch(ctx, getString(R.string.screen_text), prefs.screenText)
-        screenCard.addView(screenBox)
-        pages[0].addView(screenCard)
 
         // Speech.
         val speechCard = Ui.card(ctx, getString(R.string.section_speech))
-        val speechBox = Ui.switch(ctx, getString(R.string.speech), prefs.speech)
-        speechCard.addView(speechBox)
         val micBox = Ui.switch(ctx, getString(R.string.speech_mic), prefs.speechMic)
         speechCard.addView(micBox)
         speechCard.addView(Ui.label(ctx, getString(R.string.spoken_language)))
@@ -170,9 +190,14 @@ class MainActivity : ComponentActivity() {
             background = Ui.rounded(Ui.CARD, 0f, ctx)
         }
         status = Ui.text(ctx, "", 14f, Ui.MUTED).apply { gravity = Gravity.CENTER; setPadding(0, 0, 0, dp(10)) }
-        toggle = Ui.pill(ctx, "", true)
         bottom.addView(status)
-        bottom.addView(toggle)
+        // Screen and speech translation start and stop on their own, as on the desktop.
+        val buttons = LinearLayout(ctx).apply { orientation = LinearLayout.HORIZONTAL }
+        screenButton = Ui.pill(ctx, "", true).apply { textSize = 16f }
+        speechButton = Ui.pill(ctx, "", true).apply { textSize = 16f }
+        buttons.addView(screenButton, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { marginEnd = dp(6) })
+        buttons.addView(speechButton, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { marginStart = dp(6) })
+        bottom.addView(buttons)
 
         val rootView = LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL
@@ -193,12 +218,10 @@ class MainActivity : ComponentActivity() {
             prefs.skipNames = skip.isChecked
             prefs.useGoogle = google.isChecked
             prefs.glossary = glossary.text.toString()
-            prefs.screenText = screenBox.isChecked
-            prefs.speech = speechBox.isChecked
             prefs.speechMic = micBox.isChecked
             prefs.speechLang = speechLang.selectedItemPosition
         }
-        for (s in listOf(screenBox, speechBox, micBox, google, skip)) s.setOnCheckedChangeListener { _, _ -> save() }
+        for (s in listOf(micBox, google, skip)) s.setOnCheckedChangeListener { _, _ -> save() }
         val onPick = object : AdapterView.OnItemSelectedListener {
             var first = 2  // ignore the two initial callbacks
             override fun onItemSelected(p: AdapterView<*>?, v: View?, pos: Int, id: Long) {
@@ -231,17 +254,34 @@ class MainActivity : ComponentActivity() {
             menu.show()
         }
 
-        toggle.setOnClickListener {
+        screenButton.setOnClickListener {
             save()
-            if (CaptureService.running) {
-                startService(Intent(this, CaptureService::class.java).setAction(CaptureService.ACTION_STOP))
-                status.postDelayed({ refresh() }, 400)
-            } else if (!prefs.screenText && !prefs.speech) {
-                status.text = getString(R.string.choose_something)
-            } else if (prefs.screenText && prefs.sourceLang.code == prefs.targetLang.code) {
-                status.text = getString(R.string.pick_two_languages)
-            } else {
-                ensureLanguageData { ensureSpeechModel { startFlow() } }
+            when {
+                CaptureService.running && CaptureService.screenOn -> setFeatures(screen = false, speech = CaptureService.speechOn)
+                prefs.sourceLang.code == prefs.targetLang.code -> status.text = getString(R.string.pick_two_languages)
+                CaptureService.running && CaptureService.hasProjection ->
+                    ensureLanguageData { setFeatures(screen = true, speech = CaptureService.speechOn) }
+                else -> {  // not running, or only listening to the microphone (no screen capture yet): start afresh
+                    val keepSpeech = CaptureService.running && CaptureService.speechOn
+                    restart(screen = true, speech = keepSpeech)
+                }
+            }
+        }
+        speechButton.setOnClickListener {
+            save()
+            when {
+                CaptureService.running && CaptureService.speechOn -> setFeatures(screen = CaptureService.screenOn, speech = false)
+                CaptureService.running && (CaptureService.hasProjection || prefs.speechMic) -> ensureLanguageData {
+                    ensureSpeechModel {
+                        if (prefs.speechMic && checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+                            pendingSpeechOn = true
+                            micLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                        } else {
+                            setFeatures(screen = CaptureService.screenOn, speech = true)
+                        }
+                    }
+                }
+                else -> restart(screen = CaptureService.running && CaptureService.screenOn, speech = true)
             }
         }
     }
@@ -302,11 +342,21 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun refresh() {
-        val on = CaptureService.running
-        toggle.text = getString(if (on) R.string.stop else R.string.start_translating)
-        toggle.background = Ui.rounded(if (on) Ui.LINE else Ui.ACCENT, 999f, this)
-        toggle.setTextColor(if (on) Ui.INK else Ui.ON_ACCENT)
-        status.text = getString(if (CaptureService.running) R.string.running else R.string.stopped)
+        val screen = CaptureService.running && CaptureService.screenOn
+        val speech = CaptureService.running && CaptureService.speechOn
+        for ((button, on, start, stop) in listOf(
+            Quad(screenButton, screen, R.string.screen_start, R.string.screen_stop),
+            Quad(speechButton, speech, R.string.speech_start, R.string.speech_stop))) {
+            button.text = getString(if (on) stop else start)
+            button.background = Ui.rounded(if (on) Ui.LINE else Ui.ACCENT, 999f, this)
+            button.setTextColor(if (on) Ui.INK else Ui.ON_ACCENT)
+        }
+        status.text = getString(when {
+            screen && speech -> R.string.status_both
+            screen -> R.string.status_screen
+            speech -> R.string.status_speech
+            else -> R.string.stopped
+        })
     }
 
     private fun startFlow() {
@@ -405,3 +455,5 @@ class MainActivity : ComponentActivity() {
         }
     }
 }
+
+private data class Quad(val button: TextView, val on: Boolean, val start: Int, val stop: Int)

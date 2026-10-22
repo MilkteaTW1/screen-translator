@@ -11,16 +11,29 @@ android {
         applicationId = "io.github.milkteatw1.screentranslator"
         minSdk = 26
         targetSdk = 34
-        versionCode = 9
-        versionName = "0.5.7"
+        versionCode = 10
+        versionName = "0.5.8"
+    }
+
+    // The release key lives outside the repo: its path and passwords come from ~/.gradle/gradle.properties
+    // (SCREEN_TRANSLATOR_STORE_FILE, _STORE_PASSWORD, _KEY_ALIAS, _KEY_PASSWORD). Without them the debug key is used,
+    // so anyone can still build an APK that installs.
+    val storeFile = providers.gradleProperty("SCREEN_TRANSLATOR_STORE_FILE").orNull
+    signingConfigs {
+        if (storeFile != null) {
+            create("release") {
+                this.storeFile = file(storeFile)
+                storePassword = providers.gradleProperty("SCREEN_TRANSLATOR_STORE_PASSWORD").get()
+                keyAlias = providers.gradleProperty("SCREEN_TRANSLATOR_KEY_ALIAS").get()
+                keyPassword = providers.gradleProperty("SCREEN_TRANSLATOR_KEY_PASSWORD").get()
+            }
+        }
     }
 
     buildTypes {
         release {
             isMinifyEnabled = false
-            // Signed with the debug key so the release APK installs directly (sideloading).
-            // Publish to a store with your own keystore instead.
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.findByName("release") ?: signingConfigs.getByName("debug")
         }
     }
     compileOptions {

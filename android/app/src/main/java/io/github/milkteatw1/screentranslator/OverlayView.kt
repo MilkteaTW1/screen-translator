@@ -38,7 +38,7 @@ class OverlayView(context: Context) : View(context) {
         }
 
     @Volatile
-    var partial: String = ""
+    var partial: Pair<String, String> = "" to ""  // what is being said, and its translation so far
         set(value) {
             field = value
             postInvalidate()
@@ -131,13 +131,15 @@ class OverlayView(context: Context) : View(context) {
     /** The speech strip: a list at the bottom of the screen, newest line lowest. */
     private fun drawCaptions(canvas: Canvas) {
         val lines = captions.takeLast(4)
-        if (lines.isEmpty() && partial.isEmpty()) return
+        val live = partial
+        if (lines.isEmpty() && live.first.isEmpty()) return
         val boxWidth = width * 0.9f
         val left = (width - boxWidth) / 2
         val said = TextPaint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(200, 200, 200); textSize = 14 * density }
         val spoken = TextPaint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(255, 235, 140); textSize = 20 * density }
         var bottom = height - 72 * density
-        val rows = lines + (if (partial.isNotEmpty()) listOf(partial to "") else emptyList())
+        // The sentence being spoken shows its last words only, so a long one never fills the screen.
+        val rows = lines + (if (live.first.isNotEmpty()) listOf(live.first.takeLast(160) to live.second.takeLast(120)) else emptyList())
         for ((heard, translated) in rows.reversed()) {
             val layouts = listOf(translated to spoken, heard to said).filter { it.first.isNotEmpty() }.map { (t, p) ->
                 StaticLayout.Builder.obtain(t, 0, t.length, p, (boxWidth - 24).toInt()).build()

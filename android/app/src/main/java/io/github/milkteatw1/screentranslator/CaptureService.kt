@@ -43,7 +43,13 @@ import java.util.concurrent.TimeUnit
 class CaptureService : Service() {
     companion object {
         @Volatile var running = false
+        @Volatile var screenOn = false  // translating the text on the screen
+        @Volatile var speechOn = false  // translating what is heard
+        @Volatile var hasProjection = false  // screen capture was granted (needed for screen text and phone audio)
         const val ACTION_STOP = "stop"
+        const val ACTION_FEATURES = "features"  // switch screen / speech on or off while running
+        const val EXTRA_SCREEN = "screen"
+        const val EXTRA_SPEECH = "speech"
         const val EXTRA_CODE = "code"
         const val EXTRA_DATA = "data"
         const val EXTRA_TEST_WAV = "testWav"  // feed a WAV file to the speech engine instead of live audio (testing)
@@ -52,6 +58,7 @@ class CaptureService : Service() {
         private const val MAX_NEW_PER_SCAN = 80
         private const val TRANSLATE_THREADS = 6
         private const val BATCH = 8  // blocks per translation request
+        private const val MAX_REREADS = 4
         private const val MAX_CAPTIONS = 4
         private const val COVER_SETTLE_MS = 400L
         private const val JUMP = 8.0  // a sudden change of this size (app switch, scroll start) means everything shown is out of date
@@ -103,7 +110,10 @@ class CaptureService : Service() {
     private var lumaCols = 0
     private var chip: android.widget.TextView? = null
     private var hansHant: android.icu.text.Transliterator? = null
-    private var lastFrame: Bitmap? = null  // the latest screen picture, read again while nothing new arrives
+    private val metrics = DisplayMetrics()
+    private var frame: Bitmap? = null  // the latest screen picture (reused), read again while nothing new arrives
+    private var rereads = 0  // times the same picture was read again to confirm text
+    private val rowBuffer = IntArray(4096)
 
     override fun attachBaseContext(base: Context) = super.attachBaseContext(Ui.localized(base))
 
@@ -114,7 +124,14 @@ class CaptureService : Service() {
             stopSelf()
             return START_NOT_STICKY
         }
-        if (running) return START_NOT_STICKY
+        if (running) {
+            if (intent.action == ACTION_FEATURES) {
+                val screen = intent.getBooleanExtra(EXTRA_SCREEN, screenOn)
+                val speech = intent.getBooleanExtra(EXTRA_SPEECH, speechOn)
+                handler.post { setFeatures(screen, speech) }
+            }
+            return START_NOT_STICKY
+        }
         prefs = Prefs(this)
         src = prefs.sourceLang
         tgt = prefs.targetLang
@@ -130,8 +147,41 @@ class CaptureService : Service() {
             return START_NOT_STICKY
         }
         running = true
-        if (prefs.screenText) handler.post(::tick)
+        Companion.hasProjection = projection != null
+        screenOn = prefs.screenText && projection != null
+        speechOn = prefs.speech
+        if (screenOn) handler.post(::tick)
         return START_NOT_STICKY
+    }
+
+    /** Turns screen translation and speech translation on or off on their own; stops when both are off. */
+    private fun setFeatures(screen: Boolean, speech: Boolean) {
+        prefs = Prefs(this)  // the settings may have changed since the start
+        if (screen && !screenOn && projection != null) {
+            if (reader == null) setUpScreen(metrics)
+            val wm = getSystemService(WINDOW_SERVICE) as WindowManager
+            main.post { if (chip == null) overlay?.let { addChip(wm, it) } }
+            screenOn = true
+            forceScan = true
+            handler.post(::tick)
+        } else if (!screen && screenOn) {
+            screenOn = false
+            tracks = emptyList()
+            publish()
+        }
+        if (speech && !speechOn) {
+            if (prefs.speechMic) startInForeground(projection != null, true)
+            setUpSpeech(Intent())
+            speechOn = true
+        } else if (!speech && speechOn) {
+            this.speech?.stop()
+            this.speech = null
+            synchronized(captions) { captions.clear() }
+            overlay?.captions = emptyList()
+            overlay?.partial = "" to ""
+            speechOn = false
+        }
+        if (!screenOn && !speechOn) stopSelf()
     }
 
     private fun startInForeground(projection: Boolean, microphone: Boolean) {
@@ -158,7 +208,7 @@ class CaptureService : Service() {
     }
 
     private fun setUp(intent: Intent, hasProjection: Boolean) {
-        val dm = DisplayMetrics()
+        val dm = metrics
         val wm = getSystemService(WINDOW_SERVICE) as WindowManager
         @Suppress("DEPRECATION") wm.defaultDisplay.getRealMetrics(dm)
         width = dm.widthPixels
@@ -189,6 +239,12 @@ class CaptureService : Service() {
             PixelFormat.TRANSLUCENT)
         if (Build.VERSION.SDK_INT >= 28) {
             lp.layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
+        }
+        if (Build.VERSION.SDK_INT >= 31) {
+            // Android 12+ blocks touches that pass through another app's window unless that window is at most this
+            // opaque (0.8): at full opacity the page under the translations could not be scrolled or tapped.
+            lp.alpha = (getSystemService(Context.INPUT_SERVICE) as android.hardware.input.InputManager)
+                .maximumObscuringOpacityForTouch
         }
         main.post {
             wm.addView(view, lp)
@@ -274,7 +330,7 @@ class CaptureService : Service() {
     private fun setUpSpeech(intent: Intent) {
         val engine = SpeechEngine(
             this, prefs.speechLanguage, tgt, glossary, prefs.useGoogle,
-            onPartial = { overlay?.partial = it },
+            onPartial = { said, translation -> overlay?.partial = said to translation },
             onLine = { said, translated ->
                 synchronized(captions) {
                     captions.add(said to translated)
@@ -290,11 +346,11 @@ class CaptureService : Service() {
     }
 
     private fun tick() {
-        if (!running) return
+        if (!running || !screenOn) return
         var delay = prefs.intervalMs.toLong().coerceAtLeast(100)
         try {
             val unconfirmed = scan()
-            if (unconfirmed) delay = minOf(delay, 150)  // look again soon to confirm new text
+            if (unconfirmed) delay = minOf(delay, 300)  // look again soon to confirm new text
         } catch (e: Exception) {
             Log.w(TAG, "scan failed", e)
         }
@@ -306,25 +362,33 @@ class CaptureService : Service() {
         val image = reader?.acquireLatestImage()
         val bitmap: Bitmap
         if (image == null) {
-            // Android sends no new frame while nothing on the screen moves. Text seen only once (or still being
-            // translated) must be read again anyway, or a still page is never fully shown: use the last frame.
-            val last = lastFrame ?: return false
+            // Android sends no new frame while nothing on the screen moves. Text seen only once must be read again
+            // anyway, or a still page is never fully shown: read the last frame again (a few times at most; what is
+            // still unconfirmed after that is OCR noise, not text).
+            bitmap = frame ?: return false
             if (!forceScan && tracks.none { it.seen < 2 }) return false  // translations still on their way need no new read
-            bitmap = last.copy(Bitmap.Config.ARGB_8888, false)
+            if (!forceScan && ++rereads > MAX_REREADS) return false
         } else {
             try {
+                // One picture, reused for every frame: a new full-screen bitmap each time (about 10 MB) kept the
+                // garbage collector busy. The row padding stays on the right, outside the screen, and is never read.
                 val plane = image.planes[0]
-                val rowPadding = plane.rowStride - plane.pixelStride * width
-                val padded = Bitmap.createBitmap(width + rowPadding / plane.pixelStride, height, Bitmap.Config.ARGB_8888)
-                padded.copyPixelsFromBuffer(plane.buffer)
-                bitmap = if (padded.width == width) padded else Bitmap.createBitmap(padded, 0, 0, width, height).also { padded.recycle() }
+                val stride = plane.rowStride / plane.pixelStride
+                var f = frame
+                if (f == null || f.width != stride || f.height != height) {
+                    f?.recycle()
+                    f = Bitmap.createBitmap(stride, height, Bitmap.Config.ARGB_8888)
+                    frame = f
+                }
+                plane.buffer.rewind()
+                f!!.copyPixelsFromBuffer(plane.buffer)
+                bitmap = f
             } finally {
                 image.close()
             }
-            lastFrame?.recycle()
-            lastFrame = bitmap.copy(Bitmap.Config.ARGB_8888, false)
+            rereads = 0
         }
-        try {
+        run {
             val both = frameDiff(bitmap)
             val screenDiff = both?.second  // without our own overlay
             staticScreen = screenDiff != null && screenDiff < 2.0
@@ -350,8 +414,6 @@ class CaptureService : Service() {
             forceScan = false
             sampleLuma(bitmap)
             return process(bitmap)
-        } finally {
-            bitmap.recycle()
         }
     }
 
@@ -404,15 +466,24 @@ class CaptureService : Service() {
         return released
     }
 
+    /** One row of the screen picture (its first [width] pixels), in a buffer that is reused. */
+    private fun row(bitmap: Bitmap, y: Int): IntArray {
+        bitmap.getPixels(rowBuffer, 0, width, 0, y, width, 1)
+        return rowBuffer
+    }
+
     /** A coarse brightness map of the screen, used to find empty space (of any colour) for translations. */
     private fun sampleLuma(bitmap: Bitmap) {
         val step = 4
         val cols = width / step
         val rows = height / step
         val out = IntArray(cols * rows)
-        for (r in 0 until rows) for (c in 0 until cols) {
-            val p = bitmap.getPixel(c * step, r * step)
-            out[r * cols + c] = (299 * (p shr 16 and 0xFF) + 587 * (p shr 8 and 0xFF) + 114 * (p and 0xFF)) / 1000
+        for (r in 0 until rows) {
+            val row = row(bitmap, r * step)
+            for (c in 0 until cols) {
+                val p = row[c * step]
+                out[r * cols + c] = (299 * (p shr 16 and 0xFF) + 587 * (p shr 8 and 0xFF) + 114 * (p and 0xFF)) / 1000
+            }
         }
         luma = out
         lumaCols = cols
@@ -466,9 +537,12 @@ class CaptureService : Service() {
         val cols = width / stepX
         val rows = height / stepY
         val sample = IntArray(cols * rows)
-        for (r in 0 until rows) for (c in 0 until cols) {
-            val p = bitmap.getPixel(c * stepX, r * stepY)
-            sample[r * cols + c] = ((p shr 16 and 0xFF) + (p shr 8 and 0xFF) + (p and 0xFF)) / 3
+        for (r in 0 until rows) {
+            val row = row(bitmap, r * stepY)
+            for (c in 0 until cols) {
+                val p = row[c * stepX]
+                sample[r * cols + c] = ((p shr 16 and 0xFF) + (p shr 8 and 0xFF) + (p and 0xFF)) / 3
+            }
         }
         val old = previous
         previous = sample
@@ -658,6 +732,9 @@ class CaptureService : Service() {
 
     override fun onDestroy() {
         running = false
+        screenOn = false
+        speechOn = false
+        hasProjection = false
         speech?.stop()
         pool.shutdownNow()
         if (::handler.isInitialized) handler.removeCallbacksAndMessages(null)

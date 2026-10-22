@@ -72,4 +72,11 @@
     <string name="version">版本 %1$s</string>
     <string name="check_updates_short">檢查更新</string>
     <string name="lang_short">中文</string>
+    <string name="screen_start">開始螢幕翻譯</string>
+    <string name="screen_stop">停止螢幕翻譯</string>
+    <string name="speech_start">開始語音翻譯</string>
+    <string name="speech_stop">停止語音翻譯</string>
+    <string name="status_screen">正在翻譯螢幕</string>
+    <string name="status_speech">正在翻譯語音</string>
+    <string name="status_both">正在翻譯螢幕與語音</string>
 </resources>
