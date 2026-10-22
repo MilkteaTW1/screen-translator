@@ -53,4 +53,24 @@
     <string name="channel_name">Screen translation</string>
     <string name="notification_title">Screen Translator is running</string>
     <string name="notification_text">Tap Stop to turn translation off</string>
+    <string name="app_subtitle">Translate anything on your screen</string>
+    <string name="tab_translate">Translate</string>
+    <string name="tab_speech">Speech</string>
+    <string name="tab_quality">Quality</string>
+    <string name="tab_general">General</string>
+    <string name="section_languages">LANGUAGES</string>
+    <string name="section_screen">SCREEN</string>
+    <string name="section_speech">SPEECH</string>
+    <string name="section_engine">TRANSLATION ENGINE</string>
+    <string name="section_names">NAMES</string>
+    <string name="section_speed">SPEED</string>
+    <string name="section_app">APP</string>
+    <string name="ui_language">INTERFACE LANGUAGE</string>
+    <string name="follow_system">Follow the phone</string>
+    <string name="lang_zh_tw">繁體中文</string>
+    <string name="lang_en">English</string>
+    <string name="start_translating">Start translating</string>
+    <string name="version">Version %1$s</string>
+    <string name="check_updates_short">Check for updates</string>
+    <string name="lang_short">EN</string>
 </resources>

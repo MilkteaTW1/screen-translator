@@ -10,16 +10,13 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
-import android.text.InputType
+import android.graphics.Color
+import android.view.Gravity
 import android.view.View
+import android.view.ViewGroup
 import android.widget.AdapterView
-import android.widget.ArrayAdapter
-import android.widget.Button
-import android.widget.CheckBox
-import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ScrollView
-import android.widget.Spinner
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -27,11 +24,12 @@ import androidx.activity.result.contract.ActivityResultContracts
 import com.google.mlkit.common.model.DownloadConditions
 import com.google.mlkit.common.model.RemoteModelManager
 import com.google.mlkit.nl.translate.TranslateRemoteModel
+import io.github.milkteatw1.screentranslator.Ui.dp
 
 /** Settings screen: pick the languages, decide how language data is downloaded, start and stop. */
 class MainActivity : ComponentActivity() {
     private lateinit var prefs: Prefs
-    private lateinit var toggle: Button
+    private lateinit var toggle: TextView
     private lateinit var status: TextView
 
     private val projectionLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { r ->
@@ -50,70 +48,143 @@ class MainActivity : ComponentActivity() {
         if (ok) askNotification() else status.text = getString(R.string.mic_needed)
     }
 
+    override fun attachBaseContext(base: Context) = super.attachBaseContext(Ui.localized(base))
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         prefs = Prefs(this)
-        val pad = (16 * resources.displayMetrics.density).toInt()
-        val column = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(pad, pad * 2, pad, pad)
+        if (Build.VERSION.SDK_INT >= 33) {  // the language may also have been changed in Android's own settings
+            val tags = getSystemService(android.app.LocaleManager::class.java).applicationLocales.toLanguageTags()
+            prefs.uiLanguage = when {
+                tags.startsWith("zh") -> "zh-TW"
+                tags.startsWith("en") -> "en"
+                else -> ""
+            }
         }
-        fun label(id: Int) = TextView(this).apply { text = getString(id); setPadding(0, pad / 2, 0, 0) }
+        window.statusBarColor = Ui.GROUND
+        window.navigationBarColor = Ui.GROUND
+        val ctx = this
+        val pad = dp(18)
 
-        column.addView(TextView(this).apply { text = getString(R.string.app_title); textSize = 24f })
-        column.addView(label(R.string.screen_language))
-        val source = Spinner(this)
-        source.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, Langs.sources.map { it.label })
-        source.setSelection(prefs.source)
-        column.addView(source)
-        column.addView(label(R.string.translate_to))
-        val target = Spinner(this)
-        target.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, Langs.targets.map { it.label })
-        target.setSelection(prefs.target)
-        column.addView(target)
-
-        column.addView(label(R.string.refresh_interval))
-        val interval = EditText(this).apply {
-            inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
-            setText((prefs.intervalMs / 1000.0).toString())
+        // Header: name, one line on what it does, and the interface language.
+        val header = LinearLayout(ctx).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(pad, dp(22), pad, dp(10))
         }
-        column.addView(interval)
+        val titles = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL }
+        titles.addView(Ui.text(ctx, "Screen Translator", 24f, Ui.INK, bold = true))
+        titles.addView(Ui.text(ctx, getString(R.string.app_subtitle), 14f, Ui.MUTED))
+        header.addView(titles, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        val langButton = Ui.pill(ctx, "🌐 " + getString(R.string.lang_short), false)
+        header.addView(langButton)
 
-        val skip = CheckBox(this).apply { text = getString(R.string.skip_names); isChecked = prefs.skipNames }
-        column.addView(skip)
-        column.addView(label(R.string.glossary_label))
-        val glossary = EditText(this).apply {
-            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE
-            minLines = 3
-            setText(prefs.glossary)
-            hint = "Hatsune Miku\nNVIDIA"
+        // Settings, sorted into the same four tabs as on the desktop.
+        val pages = listOf(R.string.tab_translate, R.string.tab_speech, R.string.tab_quality, R.string.tab_general)
+            .map { LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL; setPadding(pad, dp(6), pad, dp(16)) } }
+        val tabRow = LinearLayout(ctx).apply { orientation = LinearLayout.HORIZONTAL; setPadding(pad - dp(4), 0, pad - dp(4), dp(8)) }
+        val tabs = listOf(R.string.tab_translate, R.string.tab_speech, R.string.tab_quality, R.string.tab_general).map { id ->
+            Ui.pill(ctx, getString(id), false).also { tab ->
+                tab.textSize = 13f
+                tab.maxLines = 1
+                tab.setPadding(dp(4), dp(9), dp(4), dp(9))
+                tabRow.addView(tab, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                    .apply { marginStart = dp(4); marginEnd = dp(4) })
+            }
         }
-        column.addView(glossary)
-        val google = CheckBox(this).apply { text = getString(R.string.use_google); isChecked = prefs.useGoogle }
-        column.addView(google)
+        val scroll = ScrollView(ctx)
+        fun showTab(i: Int) {
+            prefs.lastTab = i
+            tabs.forEachIndexed { j, tab ->
+                val on = i == j
+                tab.background = Ui.rounded(if (on) Ui.LINE else Color.TRANSPARENT, 999f, ctx, if (on) null else Ui.LINE)
+                tab.setTextColor(if (on) Ui.ACCENT else Ui.MUTED)
+            }
+            scroll.removeAllViews()
+            scroll.addView(pages[i])
+        }
+        tabs.forEachIndexed { i, tab -> tab.setOnClickListener { showTab(i) } }
 
-        column.addView(label(R.string.what_to_translate))
-        val screenBox = CheckBox(this).apply { text = getString(R.string.screen_text); isChecked = prefs.screenText }
-        column.addView(screenBox)
-        val speechBox = CheckBox(this).apply { text = getString(R.string.speech); isChecked = prefs.speech }
-        column.addView(speechBox)
-        val micBox = CheckBox(this).apply { text = getString(R.string.speech_mic); isChecked = prefs.speechMic }
-        column.addView(micBox)
-        column.addView(label(R.string.spoken_language))
-        val speechLang = Spinner(this)
-        speechLang.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, VoskModels.languages.map { it.label })
-        speechLang.setSelection(prefs.speechLang)
-        column.addView(speechLang)
+        // Translate: languages and the screen.
+        val languages = Ui.card(ctx, getString(R.string.section_languages))
+        languages.addView(Ui.label(ctx, getString(R.string.screen_language)))
+        val source = Ui.spinner(ctx, Langs.sources.map { it.label }, prefs.source)
+        languages.addView(source)
+        languages.addView(Ui.label(ctx, getString(R.string.translate_to)))
+        val target = Ui.spinner(ctx, Langs.targets.map { it.label }, prefs.target)
+        languages.addView(target)
+        pages[0].addView(languages)
+        val screenCard = Ui.card(ctx, getString(R.string.section_screen))
+        val screenBox = Ui.switch(ctx, getString(R.string.screen_text), prefs.screenText)
+        screenCard.addView(screenBox)
+        pages[0].addView(screenCard)
 
-        toggle = Button(this)
-        status = TextView(this).apply { setPadding(0, pad / 2, 0, 0) }
-        column.addView(toggle)
-        column.addView(status)
-        column.addView(Button(this).apply {
-            text = getString(R.string.check_updates, Updater.versionOf(this@MainActivity))
+        // Speech.
+        val speechCard = Ui.card(ctx, getString(R.string.section_speech))
+        val speechBox = Ui.switch(ctx, getString(R.string.speech), prefs.speech)
+        speechCard.addView(speechBox)
+        val micBox = Ui.switch(ctx, getString(R.string.speech_mic), prefs.speechMic)
+        speechCard.addView(micBox)
+        speechCard.addView(Ui.label(ctx, getString(R.string.spoken_language)))
+        val speechLang = Ui.spinner(ctx, VoskModels.languages.map { it.label }, prefs.speechLang)
+        speechCard.addView(speechLang)
+        pages[1].addView(speechCard)
+
+        // Quality: the engine, names, speed.
+        val engine = Ui.card(ctx, getString(R.string.section_engine))
+        val google = Ui.switch(ctx, getString(R.string.use_google), prefs.useGoogle)
+        engine.addView(google)
+        pages[2].addView(engine)
+        val names = Ui.card(ctx, getString(R.string.section_names))
+        val skip = Ui.switch(ctx, getString(R.string.skip_names), prefs.skipNames)
+        names.addView(skip)
+        names.addView(Ui.label(ctx, getString(R.string.glossary_label)))
+        val glossary = Ui.field(ctx, prefs.glossary, lines = 3).apply { hint = "Hatsune Miku\nNVIDIA" }
+        names.addView(glossary)
+        pages[2].addView(names)
+        val speed = Ui.card(ctx, getString(R.string.section_speed))
+        speed.addView(Ui.label(ctx, getString(R.string.refresh_interval)))
+        val interval = Ui.field(ctx, (prefs.intervalMs / 1000.0).toString(), number = true)
+        speed.addView(interval)
+        pages[2].addView(speed)
+
+        // General: interface language, version and updates.
+        val look = Ui.card(ctx, getString(R.string.ui_language))
+        val uiLang = Ui.spinner(ctx, Ui.uiLanguages.map { getString(it.second) },
+            Ui.uiLanguages.indexOfFirst { it.first == prefs.uiLanguage }.coerceAtLeast(0))
+        look.addView(uiLang)
+        pages[3].addView(look)
+        val about = Ui.card(ctx, getString(R.string.section_app))
+        about.addView(Ui.text(ctx, getString(R.string.version, Updater.versionOf(this)), 15f))
+        about.addView(Ui.pill(ctx, getString(R.string.check_updates_short), false).apply {
             setOnClickListener { checkForUpdates(manual = true) }
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+                .apply { topMargin = dp(12) }
         })
-        setContentView(ScrollView(this).apply { addView(column) })
+        pages[3].addView(about)
+
+        // The start button and what is happening, always in reach at the bottom.
+        val bottom = LinearLayout(ctx).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(pad, dp(10), pad, dp(18))
+            background = Ui.rounded(Ui.CARD, 0f, ctx)
+        }
+        status = Ui.text(ctx, "", 14f, Ui.MUTED).apply { gravity = Gravity.CENTER; setPadding(0, 0, 0, dp(10)) }
+        toggle = Ui.pill(ctx, "", true)
+        bottom.addView(status)
+        bottom.addView(toggle)
+
+        val rootView = LinearLayout(ctx).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(Ui.GROUND)
+            fitsSystemWindows = true
+            addView(header)
+            addView(tabRow)
+            addView(scroll, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+            addView(bottom)
+        }
+        setContentView(rootView)
+        showTab(prefs.lastTab.coerceIn(0, pages.lastIndex))
 
         fun save() {
             prefs.source = source.selectedItemPosition
@@ -127,6 +198,7 @@ class MainActivity : ComponentActivity() {
             prefs.speechMic = micBox.isChecked
             prefs.speechLang = speechLang.selectedItemPosition
         }
+        for (s in listOf(screenBox, speechBox, micBox, google, skip)) s.setOnCheckedChangeListener { _, _ -> save() }
         val onPick = object : AdapterView.OnItemSelectedListener {
             var first = 2  // ignore the two initial callbacks
             override fun onItemSelected(p: AdapterView<*>?, v: View?, pos: Int, id: Long) {
@@ -138,6 +210,26 @@ class MainActivity : ComponentActivity() {
         }
         source.onItemSelectedListener = onPick
         target.onItemSelectedListener = onPick
+        fun setUiLanguage(code: String) {
+            if (code == prefs.uiLanguage) return
+            save()
+            Ui.setLanguage(this, code)
+            if (Build.VERSION.SDK_INT < 33) recreate()  // every text again, in the new language (newer Android does it)
+        }
+        uiLang.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+            var first = 1
+            override fun onItemSelected(p: AdapterView<*>?, v: View?, pos: Int, id: Long) {
+                if (first > 0) { first--; return }
+                setUiLanguage(Ui.uiLanguages[pos].first)
+            }
+            override fun onNothingSelected(p: AdapterView<*>?) {}
+        }
+        langButton.setOnClickListener { v ->
+            val menu = android.widget.PopupMenu(ctx, v)
+            Ui.uiLanguages.forEachIndexed { i, (_, label) -> menu.menu.add(0, i, i, getString(label)) }
+            menu.setOnMenuItemClickListener { setUiLanguage(Ui.uiLanguages[it.itemId].first); true }
+            menu.show()
+        }
 
         toggle.setOnClickListener {
             save()
@@ -210,7 +302,10 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun refresh() {
-        toggle.text = getString(if (CaptureService.running) R.string.stop else R.string.start)
+        val on = CaptureService.running
+        toggle.text = getString(if (on) R.string.stop else R.string.start_translating)
+        toggle.background = Ui.rounded(if (on) Ui.LINE else Ui.ACCENT, 999f, this)
+        toggle.setTextColor(if (on) Ui.INK else Ui.ON_ACCENT)
         status.text = getString(if (CaptureService.running) R.string.running else R.string.stopped)
     }
 

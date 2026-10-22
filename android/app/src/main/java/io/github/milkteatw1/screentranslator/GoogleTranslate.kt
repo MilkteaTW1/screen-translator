@@ -16,6 +16,22 @@ object GoogleTranslate {
     /** Google's code for a target language. */
     fun code(lang: Lang) = if (lang.code == "zh") (if (lang.traditional) "zh-TW" else "zh-CN") else lang.code
 
+    /** Several short texts in one request, one per line: far fewer round trips than one request each. Null for
+     *  every text Google could not do (unreachable, or the lines did not come back one for one). */
+    fun translateMany(texts: List<String>, target: Lang): List<String?> {
+        if (texts.isEmpty()) return emptyList()
+        if (texts.size == 1) return listOf(translate(texts[0], target))
+        val joined = texts.joinToString("\n") { it.replace(Regex("\\s+"), " ").trim() }
+        return matchLines(translate(joined, target), texts.size)
+    }
+
+    /** The answer to a one-text-per-line request, split back into one translation per text (all null unless the
+     *  line count matches: then we cannot tell which line belongs to which text). */
+    fun matchLines(out: String?, count: Int): List<String?> {
+        val lines = out?.split("\n")
+        return if (lines != null && lines.size == count) lines.map { it.trim().ifEmpty { null } } else List(count) { null }
+    }
+
     /** The translation, or null when Google can't be reached (the caller falls back to offline translation). */
     fun translate(text: String, target: Lang): String? {
         if (SystemClock.uptimeMillis() - downAt < RETRY_AFTER_MS) return null

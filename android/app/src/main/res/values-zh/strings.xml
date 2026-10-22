@@ -52,4 +52,24 @@
     <string name="channel_name">螢幕翻譯</string>
     <string name="notification_title">Screen Translator 執行中</string>
     <string name="notification_text">按「停止」即可關閉翻譯</string>
+    <string name="app_subtitle">翻譯螢幕上的任何文字</string>
+    <string name="tab_translate">翻譯</string>
+    <string name="tab_speech">語音</string>
+    <string name="tab_quality">品質</string>
+    <string name="tab_general">一般</string>
+    <string name="section_languages">語言</string>
+    <string name="section_screen">螢幕</string>
+    <string name="section_speech">語音</string>
+    <string name="section_engine">翻譯引擎</string>
+    <string name="section_names">專有名詞</string>
+    <string name="section_speed">速度</string>
+    <string name="section_app">應用程式</string>
+    <string name="ui_language">介面語言</string>
+    <string name="follow_system">跟隨手機</string>
+    <string name="lang_zh_tw">繁體中文</string>
+    <string name="lang_en">English</string>
+    <string name="start_translating">開始翻譯</string>
+    <string name="version">版本 %1$s</string>
+    <string name="check_updates_short">檢查更新</string>
+    <string name="lang_short">中文</string>
 </resources>

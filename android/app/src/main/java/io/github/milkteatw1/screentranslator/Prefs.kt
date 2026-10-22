@@ -39,6 +39,21 @@ class Prefs(context: Context) {
         get() = sp.getInt("speechLang", 0).coerceIn(0, VoskModels.languages.lastIndex)
         set(v) = sp.edit().putInt("speechLang", v).apply()
 
+    /** Interface language ("" follows the phone). */
+    var uiLanguage: String
+        get() = sp.getString("uiLanguage", "") ?: ""
+        set(v) = sp.edit().putString("uiLanguage", v).apply()
+    /** Where the 譯 button was dragged to (-1: not moved yet). */
+    var chipX: Int
+        get() = sp.getInt("chipX", -1)
+        set(v) = sp.edit().putInt("chipX", v).apply()
+    var chipY: Int
+        get() = sp.getInt("chipY", -1)
+        set(v) = sp.edit().putInt("chipY", v).apply()
+    var lastTab: Int
+        get() = sp.getInt("lastTab", 0)
+        set(v) = sp.edit().putInt("lastTab", v).apply()
+
     var lastUpdateCheck: Long
         get() = sp.getLong("lastUpdateCheck", 0)
         set(v) = sp.edit().putLong("lastUpdateCheck", v).apply()

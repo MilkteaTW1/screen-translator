@@ -50,7 +50,8 @@ class CaptureService : Service() {
         private const val CHANNEL = "capture"
         private const val TAG = "ScreenTranslator"
         private const val MAX_NEW_PER_SCAN = 80
-        private const val TRANSLATE_THREADS = 3
+        private const val TRANSLATE_THREADS = 6
+        private const val BATCH = 8  // blocks per translation request
         private const val MAX_CAPTIONS = 4
         private const val COVER_SETTLE_MS = 400L
         private const val JUMP = 8.0  // a sudden change of this size (app switch, scroll start) means everything shown is out of date
@@ -102,6 +103,9 @@ class CaptureService : Service() {
     private var lumaCols = 0
     private var chip: android.widget.TextView? = null
     private var hansHant: android.icu.text.Transliterator? = null
+    private var lastFrame: Bitmap? = null  // the latest screen picture, read again while nothing new arrives
+
+    override fun attachBaseContext(base: Context) = super.attachBaseContext(Ui.localized(base))
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -217,7 +221,36 @@ class CaptureService : Service() {
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
             PixelFormat.TRANSLUCENT)
-        lp.gravity = android.view.Gravity.END or android.view.Gravity.CENTER_VERTICAL
+        lp.gravity = android.view.Gravity.TOP or android.view.Gravity.START
+        lp.x = if (prefs.chipX >= 0) prefs.chipX else width - (52 * d).toInt()
+        lp.y = if (prefs.chipY >= 0) prefs.chipY else height / 2
+        // Drag it anywhere; a short touch that hardly moves is a tap.
+        var downX = 0f
+        var downY = 0f
+        var startX = 0
+        var startY = 0
+        var dragging = false
+        button.setOnTouchListener { v, e ->
+            when (e.actionMasked) {
+                android.view.MotionEvent.ACTION_DOWN -> {
+                    downX = e.rawX; downY = e.rawY; startX = lp.x; startY = lp.y; dragging = false
+                }
+                android.view.MotionEvent.ACTION_MOVE -> {
+                    val dx = e.rawX - downX
+                    val dy = e.rawY - downY
+                    if (dragging || dx * dx + dy * dy > 12 * d * 12 * d) {
+                        dragging = true
+                        lp.x = (startX + dx).toInt().coerceIn(0, width - v.width)
+                        lp.y = (startY + dy).toInt().coerceIn(0, height - v.height)
+                        wm.updateViewLayout(v, lp)
+                    }
+                }
+                android.view.MotionEvent.ACTION_UP -> {
+                    if (dragging) { prefs.chipX = lp.x; prefs.chipY = lp.y } else v.performClick()
+                }
+            }
+            true
+        }
         chip = button
         wm.addView(button, lp)
     }
@@ -270,16 +303,26 @@ class CaptureService : Service() {
 
     /** One pass over the screen. Returns true if some text has been seen only once so far. */
     private fun scan(): Boolean {
-        val image = reader?.acquireLatestImage() ?: return false
+        val image = reader?.acquireLatestImage()
         val bitmap: Bitmap
-        try {
-            val plane = image.planes[0]
-            val rowPadding = plane.rowStride - plane.pixelStride * width
-            val padded = Bitmap.createBitmap(width + rowPadding / plane.pixelStride, height, Bitmap.Config.ARGB_8888)
-            padded.copyPixelsFromBuffer(plane.buffer)
-            bitmap = if (padded.width == width) padded else Bitmap.createBitmap(padded, 0, 0, width, height).also { padded.recycle() }
-        } finally {
-            image.close()
+        if (image == null) {
+            // Android sends no new frame while nothing on the screen moves. Text seen only once (or still being
+            // translated) must be read again anyway, or a still page is never fully shown: use the last frame.
+            val last = lastFrame ?: return false
+            if (!forceScan && tracks.none { it.seen < 2 }) return false  // translations still on their way need no new read
+            bitmap = last.copy(Bitmap.Config.ARGB_8888, false)
+        } else {
+            try {
+                val plane = image.planes[0]
+                val rowPadding = plane.rowStride - plane.pixelStride * width
+                val padded = Bitmap.createBitmap(width + rowPadding / plane.pixelStride, height, Bitmap.Config.ARGB_8888)
+                padded.copyPixelsFromBuffer(plane.buffer)
+                bitmap = if (padded.width == width) padded else Bitmap.createBitmap(padded, 0, 0, width, height).also { padded.recycle() }
+            } finally {
+                image.close()
+            }
+            lastFrame?.recycle()
+            lastFrame = bitmap.copy(Bitmap.Config.ARGB_8888, false)
         }
         try {
             val both = frameDiff(bitmap)
@@ -485,19 +528,25 @@ class CaptureService : Service() {
         tracks = fresh + carried
         Log.d(TAG, "scan blocks=${blocks.size} tracks=${tracks.size} unconfirmed=${tracks.count { it.seen < 2 }}")
 
-        for (t in tracks) cache[t.text]?.let { t.translation = it.ifEmpty { null }; t.done = true }
+        for (t in tracks) cache[t.text]?.let {
+            t.translation = it.ifEmpty { null }
+            t.done = true
+            if (it.isNotEmpty()) t.seen = maxOf(t.seen, 2)  // read and translated before (it just moved): no need to confirm it
+        }
         publish()
         // Translate in the background, top to bottom, so scanning never waits for the translator and
         // each result appears as soon as it is ready.
-        for (t in tracks.filter { !it.done && !it.queued }.take(MAX_NEW_PER_SCAN)) {
-            t.queued = true
+        for (group in tracks.filter { !it.done && !it.queued }.take(MAX_NEW_PER_SCAN).chunked(BATCH)) {
+            group.forEach { it.queued = true }
             pool.execute {
-                if (running && t in tracks) {
-                    t.translation = translate(t.text)
-                    t.done = true
+                val live = group.filter { running && it in tracks }
+                group.filter { it !in live }.forEach { it.queued = false }  // the screen moved on: queue again if it comes back
+                if (live.isNotEmpty()) {
+                    translateMany(live.map { it.text }).forEachIndexed { i, out ->
+                        live[i].translation = out
+                        live[i].done = true
+                    }
                     publish()
-                } else {
-                    t.queued = false  // the screen moved on: it can be queued again if it comes back
                 }
             }
         }
@@ -519,6 +568,19 @@ class CaptureService : Service() {
         overlay?.boxes = visible.map { OverlayView.Box(it.rect, it.translation!!, it.lineHeight, it.mode) }
     }
 
+    /** Translations of several blocks: Google takes them in one request; whatever it can't do goes offline one by one. */
+    private fun translateMany(texts: List<String>): List<String?> {
+        val todo = texts.filter { cache[it] == null }
+        if (prefs.useGoogle && todo.size > 1) {
+            val prepared = todo.map { it to TextRules.protect(it, glossary, src.script == Script.LATIN) }
+                .filter { (_, p) -> !TextRules.onlyPlaceholders(p.first) }
+            GoogleTranslate.translateMany(prepared.map { it.second.first }, tgt).forEachIndexed { i, out ->
+                if (out != null) finish(prepared[i].first, out, prepared[i].second.second)
+            }
+        }
+        return texts.map { translate(it) }  // cached by now, or done on its own
+    }
+
     private fun translate(text: String): String? {
         cache[text]?.let { return it.ifEmpty { null } }
         val (protectedText, originals) = TextRules.protect(text, glossary, src.script == Script.LATIN)
@@ -532,6 +594,11 @@ class CaptureService : Service() {
             Log.w(TAG, "translate failed: ${e.message}")
             return null  // e.g. the language data is not downloaded yet: don't cache
         }
+        return finish(text, out, originals)
+    }
+
+    /** Puts the protected names back, checks the result and caches it. */
+    private fun finish(text: String, out: String, originals: List<String>): String? {
         var result = TextRules.restore(out, originals)
         if (tgt.traditional) result = hansHant?.transliterate(result) ?: result
         val wantsCjk = tgt.code == "zh" || tgt.code == "ja" || tgt.code == "ko"

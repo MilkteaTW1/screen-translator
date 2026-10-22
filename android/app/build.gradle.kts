@@ -11,8 +11,8 @@ android {
         applicationId = "io.github.milkteatw1.screentranslator"
         minSdk = 26
         targetSdk = 34
-        versionCode = 8
-        versionName = "0.5.6"
+        versionCode = 9
+        versionName = "0.5.7"
     }
 
     buildTypes {
