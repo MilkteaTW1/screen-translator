@@ -1,8 +1,9 @@
-"""Transparent, click-through overlay that draws each translation directly above its text block."""
+"""Transparent, click-through overlay. Each translation goes in empty space next to its text block
+(above, centred, if there is room; else below) and is laid over the text when there is no room."""
 import ctypes
 import time
 
-from PySide6.QtCore import QRectF, Qt, QTimer
+from PySide6.QtCore import QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QFont, QFontMetricsF, QPainter
 from PySide6.QtWidgets import QWidget
 
@@ -10,6 +11,9 @@ WDA_EXCLUDEFROMCAPTURE = 0x11
 
 
 class Overlay(QWidget):
+    covers_changed = Signal(bool)
+    STEP = 4
+
     def __init__(self, screen):
         super().__init__()
         self.setWindowFlags(
@@ -22,12 +26,35 @@ class Overlay(QWidget):
         self.scale = screen.devicePixelRatio()
         self.items = []  # (x, y, w, h, text-or-None, line_height) in physical pixels
         self.drawn = {}  # text -> box it was drawn in (for tests)
+        self.modes = {}  # text -> 'above' | 'below' | 'cover', decided once so a translation never hops around
+        self.luma = None  # coarse brightness map of the screen (one cell per STEP pixels), to find empty space
+        self.luma_origin = (0, 0)
+        self.hide_covers = False  # translations laid over text can be switched off with the chip
+        self.has_covers = False
 
     def set_capture_hidden(self, hidden):
         """Hidden: screenshots (and our own OCR) never see the translations. Shown: users can
         screenshot them, and the worker skips text that matches its own output."""
         ctypes.windll.user32.SetWindowDisplayAffinity(
             int(self.winId()), WDA_EXCLUDEFROMCAPTURE if hidden else 0)
+
+    def set_background(self, luma, origin=(0, 0)):
+        """The latest screenshot as a coarse brightness map; lets us tell empty space (of any colour) from text."""
+        self.luma, self.luma_origin = luma, origin
+
+    def is_blank(self, r):
+        """True if the logical-pixel rectangle [r] is one flat colour on the screen (nothing drawn there)."""
+        if self.luma is None:
+            return True
+        k, st = self.scale, self.STEP
+        ox, oy = self.luma_origin
+        x0, x1 = int((r.left() * k - ox) // st), int((r.right() * k - ox) // st)
+        y0, y1 = int((r.top() * k - oy) // st), int((r.bottom() * k - oy) // st)
+        rows, cols = self.luma.shape
+        if x0 < 0 or y0 < 0 or x1 >= cols or y1 >= rows or x1 - x0 < 1 or y1 - y0 < 1:
+            return False
+        cell = self.luma[y0:y1 + 1, x0:x1 + 1].astype(int)
+        return (abs(cell - cell.mean()) > 14).mean() <= 0.03
 
     def set_items(self, items):
         # OCR boxes wobble by a few pixels between scans. Keep the previous box when the same text
@@ -41,6 +68,8 @@ class Overlay(QWidget):
             steady.append((x, y, w, h, text, lh))
         if steady != self.items:
             self.items = steady
+            texts = {i[4] for i in steady}
+            self.modes = {t: m for t, m in self.modes.items() if t in texts}
             self.update()
 
     def paintEvent(self, _):
@@ -50,34 +79,93 @@ class Overlay(QWidget):
         p.setRenderHint(QPainter.Antialiasing)
         p.setRenderHint(QPainter.TextAntialiasing)
         self.drawn = {}
-        for x, y, w, h, text, lh in self.items:
+        k = self.scale
+        srcs = [(QRectF(x / k, y / k, w / k, h / k), text, lh / k) for x, y, w, h, text, lh in self.items]
+        placed = []  # translation boxes already placed (logical pixels)
+        for i, (src, text, lh) in enumerate(srcs):
             if not text:  # untranslated line: nothing to draw
                 continue
-            rect, font = self._box(text, QRectF(x, y, w, h) if self.scale == 1 else
-                                   QRectF(x / self.scale, y / self.scale, w / self.scale, h / self.scale),
-                                   lh / self.scale)
+            mode = self.modes.get(text)
+            if mode is None:
+                others = [r for j, (r, _t, _l) in enumerate(srcs) if j != i] + placed
+                mode = self.modes[text] = self._decide(text, src, lh, others)
+            rect, font = self._box(text, src, lh, mode)
+            if mode != "cover":
+                placed.append(rect)
             self.drawn[text] = rect
+            if mode == "cover" and self.hide_covers:
+                continue
             p.setPen(Qt.NoPen)
-            p.setBrush(QColor(20, 20, 20, 225))
+            p.setBrush(QColor(20, 20, 20, 245 if mode == "cover" else 225))
             p.drawRoundedRect(rect, 4, 4)
             p.setFont(font)
             p.setPen(QColor(255, 235, 140))
             p.drawText(rect.adjusted(6, 0, -6, 0), Qt.AlignVCenter | Qt.AlignLeft | Qt.TextWordWrap, text)
+        covers = any(m == "cover" for m in self.modes.values())
+        if covers != self.has_covers:
+            self.has_covers = covers
+            self.covers_changed.emit(covers)
 
-    def _box(self, text, src, line_height):
-        """The translation box: directly above the text block, centred on it.
+    def _decide(self, text, src, lh, others):
+        """Empty space next to the block if there is some (above first, then below), else lay it over the text."""
+        for mode in ("above", "below"):
+            rect, _ = self._box(text, src, lh, mode)
+            if self.is_blank(rect) and not any(rect.intersects(o) for o in others):
+                return mode
+        return "cover"
 
-        Where it goes depends only on the block itself, never on what happens to be around it, so
-        it cannot hop between above, below and beside when something nearby appears or vanishes."""
+    def _box(self, text, src, line_height, mode="above"):
+        """The translation box. Its place is decided once, when the text is first shown, and then kept."""
         size = max(14, min(28, int(line_height * 0.85)))
         font = QFont("Microsoft JhengHei UI")
+        if mode == "cover":
+            w = max(src.width(), 40)
+            while True:
+                font.setPixelSize(size)
+                th = QFontMetricsF(font).boundingRect(QRectF(0, 0, w - 12, 10000), int(Qt.TextWordWrap), text).height() + 4
+                if th <= src.height() or size <= 11:
+                    break
+                size -= 1
+            return QRectF(src.x(), src.y(), w, max(src.height(), th)), font
         font.setPixelSize(size)
         maxw = min(max(src.width(), 260), self.width() - 8)
         r = QFontMetricsF(font).boundingRect(QRectF(0, 0, maxw - 12, 10000), int(Qt.TextWordWrap), text)
         tw, th = r.width() + 12, r.height() + 4
         x = min(max(src.center().x() - tw / 2, 0), self.width() - tw)
-        y = max(src.y() - th - 2, 0)
+        y = src.bottom() + 2 if mode == "below" else max(src.y() - th - 2, 0)
         return QRectF(x, y, tw, th), font
+
+
+class CoverChip(QWidget):
+    """A small round button that appears while a translation covers text; one click hides or shows those covers."""
+
+    def __init__(self, overlay):
+        super().__init__()
+        self.overlay = overlay
+        self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool)
+        self.setAttribute(Qt.WA_TranslucentBackground)
+        self.setAttribute(Qt.WA_ShowWithoutActivating)
+        self.setFixedSize(40, 40)
+        geo = overlay.geometry()
+        self.move(geo.right() - 56, geo.center().y())
+        overlay.covers_changed.connect(self.setVisible)
+
+    def mousePressEvent(self, _):
+        self.overlay.hide_covers = not self.overlay.hide_covers
+        self.overlay.update()
+        self.update()
+
+    def paintEvent(self, _):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        p.setPen(Qt.NoPen)
+        p.setBrush(QColor(30, 90, 200, 120 if self.overlay.hide_covers else 220))
+        p.drawEllipse(self.rect().adjusted(2, 2, -2, -2))
+        p.setPen(Qt.white)
+        f = QFont("Microsoft JhengHei UI")
+        f.setPixelSize(18)
+        p.setFont(f)
+        p.drawText(self.rect(), Qt.AlignCenter, "譯")
 
 
 class CaptionOverlay(QWidget):

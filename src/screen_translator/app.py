@@ -20,7 +20,7 @@ from PySide6.QtWidgets import (
 )
 
 from . import ocr
-from .overlay import CaptionOverlay, Overlay
+from .overlay import CaptionOverlay, CoverChip, Overlay
 from .speech import MODELS, SpeechWorker, download_model, find_model, import_model
 from . import packs
 from .translator import (
@@ -141,6 +141,8 @@ class Worker(QObject):
                     self.static = diff is not None and diff < 2.0  # barely changed: not scrolling or playing video
                     if diff is None or diff > 0.6 or self.dirty:
                         prev, self.dirty = small, False
+                        gray = (arr[::4, ::4, :3].astype(np.int32) * (114, 587, 299)).sum(axis=2) // 1000  # B, G, R
+                        self.background.emit((gray.astype(np.int16), self.origin))
                         self.results.emit(self._process(recognizer, shot, s, pool))
                         self.status.emit(self._status_text())
                         # Text seen only once is not shown yet: look again soon to confirm it.
@@ -569,6 +571,8 @@ def main():
     langs = LANGUAGES
     overlay = Overlay(app.primaryScreen())
     overlay.show()
+    worker.background.connect(lambda b: overlay.set_background(*b))
+    chip = CoverChip(overlay)  # noqa: F841 (kept alive; shows itself when a translation covers text)
     worker = Worker(langs)
     overlay.set_capture_hidden(worker.settings["hide_from_capture"])
     speech = SpeechWorker()

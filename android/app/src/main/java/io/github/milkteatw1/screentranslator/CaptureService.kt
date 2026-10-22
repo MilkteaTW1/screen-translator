@@ -58,6 +58,7 @@ class CaptureService : Service() {
         @Volatile var translation: String? = null
         @Volatile var done = false
         @Volatile var queued = false
+        @Volatile var mode = -1  // where the translation goes; decided once, so it never hops around
         var seen = 1
         var missed = 0
     }
@@ -87,6 +88,9 @@ class CaptureService : Service() {
     private var glossary = listOf<String>()
     private val cache = java.util.concurrent.ConcurrentHashMap<String, String>()
     @Volatile private var shown = listOf<String>()
+    private var luma = IntArray(0)
+    private var lumaCols = 0
+    private var chip: android.widget.TextView? = null
     private var hansHant: android.icu.text.Transliterator? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -172,10 +176,40 @@ class CaptureService : Service() {
         if (Build.VERSION.SDK_INT >= 28) {
             lp.layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
         }
-        main.post { wm.addView(view, lp) }
+        main.post {
+            wm.addView(view, lp)
+            if (prefs.screenText) addChip(wm, view)
+        }
 
         if (prefs.screenText) setUpScreen(dm)
         if (prefs.speech) setUpSpeech(intent)
+    }
+
+    /** A small button, shown only while a translation covers text: one tap hides or shows those covers. */
+    private fun addChip(wm: WindowManager, view: OverlayView) {
+        val d = resources.displayMetrics.density
+        val button = android.widget.TextView(this).apply {
+            text = "譯"
+            textSize = 16f
+            gravity = android.view.Gravity.CENTER
+            setTextColor(android.graphics.Color.WHITE)
+            background = android.graphics.drawable.GradientDrawable().apply {
+                shape = android.graphics.drawable.GradientDrawable.OVAL
+                setColor(android.graphics.Color.argb(200, 30, 90, 200))
+            }
+            visibility = android.view.View.GONE
+            setOnClickListener {
+                view.hideCovers = !view.hideCovers
+                alpha = if (view.hideCovers) 0.5f else 1f
+            }
+        }
+        val lp = WindowManager.LayoutParams((44 * d).toInt(), (44 * d).toInt(),
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+            PixelFormat.TRANSLUCENT)
+        lp.gravity = android.view.Gravity.END or android.view.Gravity.CENTER_VERTICAL
+        chip = button
+        wm.addView(button, lp)
     }
 
     private fun setUpScreen(dm: DisplayMetrics) {
@@ -243,10 +277,65 @@ class CaptureService : Service() {
             val unconfirmed = tracks.any { it.seen < 2 }
             val pending = tracks.any { !it.done }
             if (diff != null && diff <= 0.6 && !unconfirmed && !pending) return false
+            sampleLuma(bitmap)
             return process(bitmap)
         } finally {
             bitmap.recycle()
         }
+    }
+
+    /** A coarse brightness map of the screen, used to find empty space (of any colour) for translations. */
+    private fun sampleLuma(bitmap: Bitmap) {
+        val step = 4
+        val cols = width / step
+        val rows = height / step
+        val out = IntArray(cols * rows)
+        for (r in 0 until rows) for (c in 0 until cols) {
+            val p = bitmap.getPixel(c * step, r * step)
+            out[r * cols + c] = (299 * (p shr 16 and 0xFF) + 587 * (p shr 8 and 0xFF) + 114 * (p and 0xFF)) / 1000
+        }
+        luma = out
+        lumaCols = cols
+    }
+
+    /** True if [r] is on the screen and is one flat colour (nothing drawn there), whatever that colour is. */
+    private fun isBlank(r: RectF): Boolean {
+        if (r.left < 0 || r.top < 0 || r.right > width || r.bottom > height || lumaCols == 0) return false
+        val step = 4
+        val rows = luma.size / lumaCols
+        val x0 = (r.left / step).toInt(); val x1 = minOf(lumaCols - 1, (r.right / step).toInt())
+        val y0 = (r.top / step).toInt(); val y1 = minOf(rows - 1, (r.bottom / step).toInt())
+        var sum = 0L; var n = 0
+        for (y in y0..y1) for (x in x0..x1) { sum += luma[y * lumaCols + x]; n++ }
+        if (n < 4) return false
+        val mean = sum / n
+        var off = 0
+        for (y in y0..y1) for (x in x0..x1) if (Math.abs(luma[y * lumaCols + x] - mean) > 14) off++
+        return off <= n * 0.03
+    }
+
+    /** Empty space next to the text if there is some (above first, then below), otherwise lay the translation over the text. */
+    private fun place(t: Track, all: List<Track>): Int {
+        val view = overlay ?: return OverlayView.ABOVE
+        val (w, h) = view.measure(OverlayView.Box(t.rect, t.translation ?: "", t.lineHeight))
+        val left = (t.rect.centerX() - w / 2).coerceIn(0f, maxOf(0f, width - w))
+        val above = RectF(left, t.rect.top - h - 2, left + w, t.rect.top - 2)
+        val below = RectF(left, t.rect.bottom + 2, left + w, t.rect.bottom + 2 + h)
+        fun free(r: RectF) = isBlank(r) && all.none { o -> o !== t && (RectF.intersects(o.rect, r) ||
+            (o.mode != OverlayView.COVER && o.mode >= 0 && RectF.intersects(sideRect(o), r))) }
+        return when {
+            free(above) -> OverlayView.ABOVE
+            free(below) -> OverlayView.BELOW
+            else -> OverlayView.COVER
+        }
+    }
+
+    private fun sideRect(t: Track): RectF {
+        val view = overlay ?: return t.rect
+        val (w, h) = view.measure(OverlayView.Box(t.rect, t.translation ?: "", t.lineHeight))
+        val left = (t.rect.centerX() - w / 2).coerceIn(0f, maxOf(0f, width - w))
+        return if (t.mode == OverlayView.BELOW) RectF(left, t.rect.bottom + 2, left + w, t.rect.bottom + 2 + h)
+        else RectF(left, t.rect.top - h - 2, left + w, t.rect.top - 2)
     }
 
     /** Mean brightness change of a sparse sample of pixels versus the previous scan (null on the first). */
@@ -324,8 +413,11 @@ class CaptureService : Service() {
     @Synchronized
     private fun publish() {
         val visible = tracks.filter { it.seen >= 2 && it.done && it.translation != null }
+        for (t in visible) if (t.mode < 0) t.mode = place(t, tracks)
+        val covering = visible.any { it.mode == OverlayView.COVER }
+        main.post { chip?.visibility = if (covering) android.view.View.VISIBLE else android.view.View.GONE }
         shown = visible.map { TextRules.normalize(it.translation!!) }
-        overlay?.boxes = visible.map { OverlayView.Box(it.rect, it.translation!!, it.lineHeight) }
+        overlay?.boxes = visible.map { OverlayView.Box(it.rect, it.translation!!, it.lineHeight, it.mode) }
     }
 
     private fun translate(text: String): String? {
@@ -392,8 +484,11 @@ class CaptureService : Service() {
         pool.shutdownNow()
         if (::handler.isInitialized) handler.removeCallbacksAndMessages(null)
         val view = overlay
-        if (view != null) {
-            main.post { (getSystemService(WINDOW_SERVICE) as WindowManager).removeView(view) }
+        val button = chip
+        main.post {
+            val wm = getSystemService(WINDOW_SERVICE) as WindowManager
+            if (view != null) wm.removeView(view)
+            if (button != null) wm.removeView(button)
         }
         display?.release()
         reader?.close()
