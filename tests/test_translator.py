@@ -28,21 +28,23 @@ def test_needed_pairs_pivot_through_english():
     assert needed_pairs("en", "en") == []
 
 
-def test_llm_engine_is_used_and_falls_back(monkeypatch):
+def test_google_is_first_and_offline_is_the_backup(monkeypatch):
     from screen_translator import translator as t
     tr = t.Translator()
-    tr.llm = ("http://x/v1", "m")
-    monkeypatch.setattr(t, "llm_translate", lambda text, *a: "你好，世界。")
+    tr.google = True
+    monkeypatch.setattr(t, "google_translate", lambda text, *a: "你好，世界。")
     assert tr.translate("Hello there, world.", "en", "zh-TW", "en-US", [], True, False) == "你好，世界。"
-    assert tr.engine == "llm"
+    assert tr.engine == "google"
     tr.clear()
 
     def down(*a):
-        raise OSError("refused")
-    monkeypatch.setattr(t, "llm_translate", down)
+        raise OSError("no internet")
+    monkeypatch.setattr(t, "google_translate", down)
     monkeypatch.setattr(tr, "_argos_many", lambda texts, *a: ["離線翻譯。"] * len(texts))
     assert tr.translate("Hello there, world.", "en", "zh-TW", "en-US", [], True, False) == "離線翻譯。"
     assert tr.engine == "offline"
+    tr.clear()
+    assert tr.translate("Hello there, again.", "en", "zh-TW", "en-US", [], True, False) == "離線翻譯。"  # Google is skipped for a while
 
 
 class _FakeEngine:

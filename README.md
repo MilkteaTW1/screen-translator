@@ -20,12 +20,12 @@ Nothing is sent over the network and your normal use of the computer is not dist
   (a tray option lets screenshots include translations).
 - Speech translation (Windows): listens to what the computer plays (or the microphone), transcribes it offline with
   Whisper and lists what was said with its translation in a strip at the bottom of the screen. The speech model
-  (tiny 75 MB / base 145 MB / small 485 MB) is downloaded only after you choose: download now, use a model folder
+  (tiny 75 MB / base 145 MB) is downloaded only after you choose: download now, use a model folder
   you already have (it also finds models in the Hugging Face cache), or not now.
 - Light on resources: runs at below-normal priority, 2 translation threads, no torch/spacy; starts in about a second
   and can start with Windows, minimised to the tray, translating right away.
-- Optional better quality: point it at a local LLM server (Ollama, LM Studio...) in the settings; falls back to
-  the built-in model when the server is not running.
+- Translates with Google Translate first (the text is sent to Google; can be turned off in the settings) and falls back
+  to the built-in offline model when there is no internet.
 - Configurable refresh interval (0 s and up; the real limit is OCR speed).
 - Settings are sorted into tabs (Translate, Speech, Quality, General). The interface starts in the language Windows is
   set to and can be switched with the language button at the top of the window.
@@ -128,11 +128,11 @@ MIT
   譯文位置只由自己的區塊決定,不會在上下左右之間跳來跳去。
 - 覆蓋層與設定視窗不會被截圖拍到,所以不會翻譯到自己的譯文(托盤選單可改成讓截圖包含譯文)。
 - 語音翻譯(Windows):聽電腦播放的聲音(或麥克風),用 Whisper 離線轉成文字,
-  並把「聽到的內容與翻譯」列在螢幕下方。語音模型(tiny 75 MB / base 145 MB / small 485 MB)
+  並把「聽到的內容與翻譯」列在螢幕下方。語音模型(tiny 75 MB / base 145 MB)
   由你決定怎麼取得:現在下載、使用你已有的模型資料夾(也會自動找 Hugging Face 快取裡的模型)、或暫不下載。
 - 低資源:以低優先權執行、翻譯只用 2 個執行緒、不含 torch/spacy,約一秒啟動,
   可開機自動啟動並縮小到系統匣、啟動即開始翻譯。
-- 可選的更高品質:在設定中指定本機 LLM 伺服器(Ollama、LM Studio 等),伺服器沒開時自動退回內建模型。
+- 優先使用 Google 翻譯(文字會傳送給 Google,可在設定中關閉),沒有網路時自動退回內建離線模型。
 - 可自訂刷新間隔(0 秒起,實際速度受 OCR 速度限制)。
 - 設定依用途分成分頁(翻譯、語音、品質、一般);介面預設使用 Windows 的語言,可用視窗上方的語言按鈕切換。
 

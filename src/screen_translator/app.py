@@ -25,7 +25,7 @@ from PySide6.QtWidgets import (
 from . import ocr, tracking
 from .overlay import CaptionOverlay, CoverChip, Overlay
 from .speech import MODELS, SpeechWorker, download_model, ensure_streams, find_model, import_model
-from . import __version__, i18n, llm_setup, packs, updater
+from . import __version__, i18n, packs, updater
 from .i18n import t
 from .translator import (
     LANGUAGES, Translator, argos_code, install_pack, looks_like_source, missing_pairs, needed_pairs, ocr_tag_to_code,
@@ -38,7 +38,7 @@ DEFAULTS = {
     "hide_from_capture": True, "skip_names": True,
     "autostart": False, "start_on_launch": False,
     "speech_enabled": False, "speech_source": "system", "speech_model": "base", "speech_lang": "auto",
-    "llm_enabled": False, "llm_url": "http://localhost:11434/v1", "llm_model": "qwen2.5:7b",
+    "use_google": True,
     "ui_language": "",  # interface language; empty = the one Windows is set to
 }
 MAX_BLOCKS = 40  # most text blocks translated per screen pass
@@ -96,8 +96,18 @@ def load_settings():
 
 
 def _visible(track):
-    """The translation to draw for a followed block: only once it has been seen twice and translated."""
-    return track["translation"] if track["seen"] >= 2 and track["done"] else None
+    """The translation to draw for a followed block: only once it has been seen twice and translated. While its
+    text is being translated again (the paragraph grew as it scrolled into view) the old translation stays."""
+    if track["seen"] < 2:
+        return None
+    return track["translation"] if track["done"] else track.get("stale")
+
+
+def _grows(old, new):
+    """True when one text is the other with more (or less) of the same paragraph: a block cut off by the screen
+    edge shows more lines as it scrolls in."""
+    short, long_ = sorted((old, new), key=len)
+    return len(short) >= 12 and (short in long_ or long_.startswith(short[:max(12, int(len(short) * 0.7))]))
 
 
 class Worker(QObject):
@@ -110,25 +120,31 @@ class Worker(QObject):
         self.langs = langs  # display name -> language code
         self.settings = load_settings()
         self.translator = Translator()
-        self._use_llm(self.settings)
+        self._use_engine(self.settings)
         self.running = False
         self.dirty = True
         self.thread = None
         self.shown = set()  # translations currently on screen, whitespace-stripped
         self.tracks = []  # text blocks followed from scan to scan: position, text, translation, times seen
         self._others = []  # (x, y, w, h, line height) of lines we do not translate: the overlay keeps clear of them
+        self.overlay_rects = lambda: []  # set by main(): the boxes the overlay has drawn, in screen pixels
+        self.mask_own_overlay = True
+        self._recognizer, self._prev, self._prev_keep, self._prev_gray = None, None, None, None
+        self._prev_gray_boxes = []
+        self._last_scan = 0.0
+        self._boxes = []  # our own boxes in the picture being scanned
         self.static = False  # the screen barely changed since the previous scan
         self.origin = (0, 0)  # top-left of the scanned area, added back so the overlay draws in screen coordinates
 
     def configure(self, settings):
         self.settings = settings
-        self._use_llm(settings)
+        self._use_engine(settings)
         self.tracks = []
         self.translator.clear()
         self.dirty = True
 
-    def _use_llm(self, s):
-        self.translator.llm = (s["llm_url"], s["llm_model"]) if s["llm_enabled"] else None
+    def _use_engine(self, s):
+        self.translator.google = bool(s.get("use_google", True))
 
     def start(self):
         if self.running:
@@ -143,47 +159,100 @@ class Worker(QObject):
         self.results.emit([])
 
     def _loop(self):
-        recognizer, prev, prev_gray, last_scan = None, None, None, 0.0
         with mss.mss() as sct:
             mon = sct.monitors[1]
             while self.running:
                 s = self.settings
                 try:
-                    if recognizer is None or recognizer.tag != s["source"]:
-                        recognizer = ocr.make_recognizer(s["source"])
                     region = s.get("region")  # [left, top, width, height]: translate only this part of the screen
                     self.origin = (region[0], region[1]) if region else (0, 0)
                     shot = sct.grab(dict(left=region[0], top=region[1], width=region[2], height=region[3])
                                     if region else mon)
-                    arr = np.frombuffer(shot.bgra, np.uint8).reshape(shot.height, shot.width, 4)
-                    small = arr[::8, ::8, :3].astype(np.int16)
-                    diff = None if prev is None or small.shape != prev.shape else float(np.abs(small - prev).mean())
-                    self.static = diff is not None and diff < 2.0  # barely changed: not scrolling or playing video
-                    changed = diff is None or diff > 0.6
-                    green = arr[:, :, 1]  # one channel is enough to follow shifting text
-                    if changed and self.tracks and prev_gray is not None and not self.static:
-                        if self._follow_scroll(prev_gray, green) != (0, 0):  # (0, 0): too little to measure yet
-                            prev_gray = green
-                    else:
-                        prev_gray = green
-                    if scan_due(changed, self.dirty, time.monotonic() - last_scan, s["interval"]):
-                        prev, self.dirty = small, False
-                        gray = (arr[::4, ::4, :3].astype(np.int32) * (114, 587, 299)).sum(axis=2) // 1000  # B, G, R
-                        self.background.emit((gray.astype(np.int16), self.origin))
-                        self.results.emit(self._process(recognizer, shot, s))
-                        self.status.emit(self._status_text())
-                        # Text seen only once is not shown yet: look again soon to confirm it.
-                        self.dirty = self.dirty or any(t["seen"] < 2 for t in self.tracks)
-                        last_scan = time.monotonic()
+                    self._step(shot, time.monotonic())
                 except Exception as e:  # keep the loop alive; show the problem in the UI
                     self.status.emit(t("status_error", err=e))
                     time.sleep(1.0)  # do not retry a failing step 12 times a second
                 time.sleep(POLL)
 
-    def _follow_scroll(self, before, now):
+    def _own_boxes(self):
+        """Translation boxes the overlay has drawn, in the captured picture's pixels: they are only in the picture
+        when screenshots are allowed to include translations (otherwise Windows leaves them out)."""
+        if not self.mask_own_overlay or self.settings["hide_from_capture"]:
+            return []
+        ox, oy = self.origin
+        return [(x0 - ox, y0 - oy, x1 - ox, y1 - oy) for x0, y0, x1, y1 in self.overlay_rects()]
+
+    @staticmethod
+    def _keep_mask(shape, boxes, step=8, margin=8):
+        """Grid (one cell per `step` px) that is False where one of our own boxes is drawn."""
+        keep = np.ones((len(range(0, shape[0], step)), len(range(0, shape[1], step))), bool)
+        for x0, y0, x1, y1 in boxes:
+            keep[max(0, int(y0 - margin) // step):max(0, int(y1 + margin) // step + 1),
+                 max(0, int(x0 - margin) // step):max(0, int(x1 + margin) // step + 1)] = False
+        return keep
+
+    @staticmethod
+    def _cover_share(box, boxes):
+        """How much of box (x, y, w, h) our own boxes cover, 0..1."""
+        x, y, w, h = box
+        if w <= 0 or h <= 0:
+            return 0.0
+        area = 0.0
+        for x0, y0, x1, y1 in boxes:
+            area += max(0.0, min(x + w, x1) - max(x, x0)) * max(0.0, min(y + h, y1) - max(y, y0))
+        return min(1.0, area / (w * h))
+
+    def _step(self, shot, now):
+        """One look at the screen: follow a scroll, and OCR + translate when something new may be there."""
+        s = self.settings
+        if self._recognizer is None or self._recognizer.tag != s["source"]:
+            self._recognizer = ocr.make_recognizer(s["source"])
+        arr = np.frombuffer(shot.bgra, np.uint8).reshape(shot.height, shot.width, 4)
+        boxes = self._own_boxes()
+        keep = self._keep_mask(arr.shape, boxes)
+        for t in self.tracks:
+            t["followed"] = False
+        small = arr[::8, ::8, :3].astype(np.int16)
+        prev = self._prev
+        if prev is None or small.shape != prev.shape:
+            diff = None
+        else:  # our own translation boxes (drawn now or at the last scan) are not "the screen changing"
+            both = keep & self._prev_keep
+            diff = float(np.abs(small - prev)[both].mean()) if both.any() else 0.0
+        self.static = diff is not None and diff < 2.0  # barely changed: not scrolling or playing video
+        changed = diff is None or diff > 0.6
+        green = arr[:, :, 1]  # one channel is enough to follow shifting text
+        scrolled = False
+        if changed and self.tracks and self._prev_gray is not None and not self.static:
+            shift = self._follow_scroll(self._prev_gray, green, boxes, self._prev_gray_boxes)
+            scrolled = bool(shift)
+            if shift != (0, 0):  # (0, 0): too little to measure yet
+                self._prev_gray, self._prev_gray_boxes = green, boxes
+            if shift is None:  # the page changed: what we cover may be gone, and we cannot see under it
+                self.tracks = [t for t in self.tracks if not t.get("covered")]
+        else:
+            self._prev_gray, self._prev_gray_boxes = green, boxes
+        # On a frame where the picture has just scrolled, our own boxes still sit where the text was a moment ago
+        # and would cover the wrong words: wait for the next frame (a long scroll is still read once a second).
+        wait = scrolled and now - self._last_scan < 1.0
+        if scan_due(changed, self.dirty, now - self._last_scan, s["interval"]) and not wait:
+            self._prev, self._prev_keep, self.dirty = small, keep, False
+            gray = (arr[::4, ::4, :3].astype(np.int32) * (114, 587, 299)).sum(axis=2) // 1000  # B, G, R
+            self.background.emit((gray.astype(np.int16), self.origin))
+            self._boxes = boxes
+            self.results.emit(self._process(self._recognizer, shot, s))
+            self.status.emit(self._status_text())
+            # Text seen only once is not shown yet: look again soon to confirm it.
+            self.dirty = self.dirty or any(t["seen"] < 2 for t in self.tracks)
+            self._last_scan = time.monotonic()
+
+    def _follow_scroll(self, before, now, boxes=(), before_boxes=()):
         """The picture scrolled: move the translations with it right away (no OCR, no new translation), and drop
         the ones that left the screen. Returns what tracking.follow returned."""
-        shift = tracking.follow(self.tracks, before, now)
+        for t in self.tracks:  # a block hidden under our own box cannot show its own pixels moving
+            t["covered"] = bool(before_boxes) and _visible(t) is not None and self._cover_share(
+                (t["x"], t["y"], t["w"], t["h"]), before_boxes) >= 0.6
+        shift = tracking.follow(self.tracks, before, now, ignore=[*boxes, *before_boxes])
         if not shift or shift == (0, 0):
             return shift
         dx, dy = shift
@@ -206,11 +275,13 @@ class Worker(QObject):
         if t.missing_packs:
             need = ", ".join(f"{a}→{b}" for a, b in sorted(t.missing_packs))
             return i18n.t("status_packs_needed", names=need)
-        return i18n.t("status_running_llm" if t.engine == "llm" else "status_running_offline")
+        return i18n.t("status_running_google" if t.engine == "google" else "status_running_offline")
 
     def _process(self, recognizer, shot, s):
         glossary = [t.strip() for t in s["glossary"].splitlines() if t.strip()]
-        everything = recognizer.recognize(shot.bgra, shot.width, shot.height)
+        boxes = self._boxes
+        everything = [l for l in recognizer.recognize(shot.bgra, shot.width, shot.height)
+                      if self._cover_share((l.x, l.y, l.w, l.h), boxes) < 0.5]  # not our own translations
         supported = set(self.langs.values())
         target = s["target"]
 
@@ -233,11 +304,14 @@ class Worker(QObject):
         #  - a shown block that is missed once on a still screen stays (OCR dropout).
         fresh, used = [], set()
         for b in blocks:
-            t = self._match_track(b, used)
+            t = self._match_track(b, used, boxes)
             if t:
                 used.add(id(t))
                 t["seen"] += 1
                 t["missed"] = 0
+                if t["text"] != b.text and difflib.SequenceMatcher(None, b.text, t["text"]).ratio() < 0.8:
+                    t["stale"] = t["translation"] or t.get("stale")  # keep showing it until the new one is ready
+                    t.update(text=b.text, translation=None, done=False)
                 if not self._same_place(t, b):  # it really moved (scrolling): follow it
                     t.update(x=b.x, y=b.y, w=b.w, h=b.h, lh=b.lh)
             else:
@@ -247,6 +321,12 @@ class Worker(QObject):
         carried = []
         for t in self.tracks:
             if id(t) not in used:
+                if _visible(t) is not None and self._cover_share((t["x"], t["y"], t["w"], t["h"]), boxes) >= 0.6:
+                    carried.append(t)  # hidden under our own box: the scan cannot see it, but it is still there
+                    continue
+                if t.get("followed"):
+                    carried.append(t)  # its own pixels were just seen moving with the scroll: it is still there
+                    continue
                 t["missed"] += 1
                 if self.static and t["seen"] >= 2 and t["missed"] <= 1:
                     carried.append(t)
@@ -278,14 +358,17 @@ class Worker(QObject):
                     break
         return self._snapshot()
 
-    def _match_track(self, block, used):
-        """The earlier text block this one most likely is: overlapping area and nearly the same text."""
+    def _match_track(self, block, used, boxes=()):
+        """The earlier text block this one most likely is: overlapping area and nearly the same text (less alike is
+        fine where our own boxes cover part of it: the scan then reads only part of the text)."""
         best, best_iou = None, 0.5
         for t in self.tracks:
             if id(t) in used:
                 continue
             iou = _iou((block.x, block.y, block.w, block.h), (t["x"], t["y"], t["w"], t["h"]))
-            if iou > best_iou and difflib.SequenceMatcher(None, block.text, t["text"]).ratio() >= 0.8:
+            need = 0.5 if self._cover_share((t["x"], t["y"], t["w"], t["h"]), boxes) >= 0.15 else 0.8
+            if iou > best_iou and (difflib.SequenceMatcher(None, block.text, t["text"]).ratio() >= need
+                                   or _grows(t["text"], block.text)):
                 best, best_iou = t, iou
         return best
 
@@ -306,7 +389,6 @@ class Panel(QWidget):
     speech_model_done = Signal(bool)
     update_found = Signal(str, str)
     update_ready = Signal(str)
-    llm_done = Signal(bool)
     language_changed = Signal()
 
     def __init__(self, worker, overlay, langs, speech=None, captions=None):
@@ -344,11 +426,7 @@ class Panel(QWidget):
         self.skip_names = self._check("skip_names", s["skip_names"])
         self.autostart = self._check("autostart", s["autostart"])
         self.start_on_launch = self._check("start_on_launch", s["start_on_launch"])
-        self.llm = self._check("llm_enable", s["llm_enabled"])
-        self.llm_url = QLineEdit(s["llm_url"])
-        self.llm_model = QLineEdit(s["llm_model"])
-        self.llm_install = QPushButton()
-        self._text(self.llm_install.setText, "llm_install")
+        self.google = self._check("google_enable", s["use_google"])
         self.speech_enabled = self._check("speech_enable", s["speech_enabled"])
         self.speech_source = QComboBox()
         self.speech_source.addItem("", "system")
@@ -421,16 +499,11 @@ class Panel(QWidget):
         box.addWidget(label)
         box.addWidget(self.glossary)
         lay.addWidget(names)
-        llm_box = QGroupBox()
-        self._text(llm_box.setTitle, "group_llm")
-        box = QVBoxLayout(llm_box)
-        box.addWidget(self.llm)
-        llm_form = QFormLayout()
-        self._row(llm_form, "llm_server_url", self.llm_url)
-        self._row(llm_form, "llm_model", self.llm_model)
-        box.addLayout(llm_form)
-        box.addWidget(self.llm_install)
-        lay.addWidget(llm_box)
+        engine = QGroupBox()
+        self._text(engine.setTitle, "group_engine")
+        box = QVBoxLayout(engine)
+        box.addWidget(self.google)
+        lay.addWidget(engine)
         lay.addStretch(1)
         self._tab(quality, "tab_quality")
 
@@ -471,19 +544,15 @@ class Panel(QWidget):
         self.pack_finished.connect(self._packs_ready)
         self.update_found.connect(self._offer_update)
         self.update_ready.connect(self._run_installer)
-        self.llm_done.connect(self._llm_installed)
-        self.llm_install.clicked.connect(self.install_llm)
         self.interval.valueChanged.connect(self.apply)
         self.hide_capture.toggled.connect(self.apply)
         self.skip_names.toggled.connect(self.apply)
         self.auto.toggled.connect(self.apply)
         self.kata.toggled.connect(self.apply)
         self.glossary.textChanged.connect(self.apply)
-        self.llm.toggled.connect(self.apply)
+        self.google.toggled.connect(self.apply)
         self.autostart.toggled.connect(self.apply)
         self.start_on_launch.toggled.connect(self.apply)
-        self.llm_url.editingFinished.connect(self.apply)
-        self.llm_model.editingFinished.connect(self.apply)
         worker.status.connect(self.state.setText)
         worker.results.connect(overlay.set_items)
         self.speech_enabled.toggled.connect(self.apply)
@@ -497,6 +566,7 @@ class Panel(QWidget):
         if speech is not None:
             speech.status.connect(self.speech_state.setText)
             speech.line.connect(captions.add)
+            speech.partial.connect(captions.set_live)
 
         self.retranslate()
         self.state.setText(t("state_stopped"))
@@ -573,9 +643,9 @@ class Panel(QWidget):
             "interval": self.interval.value(), "auto_proper": self.auto.isChecked(),
             "keep_katakana": self.kata.isChecked(), "glossary": self.glossary.toPlainText(),
             "hide_from_capture": self.hide_capture.isChecked(),
-            "skip_names": self.skip_names.isChecked(), "llm_enabled": self.llm.isChecked(),
+            "skip_names": self.skip_names.isChecked(),
+            "use_google": self.google.isChecked(),
             "autostart": self.autostart.isChecked(), "start_on_launch": self.start_on_launch.isChecked(),
-            "llm_url": self.llm_url.text().strip(), "llm_model": self.llm_model.text().strip(),
             "speech_enabled": self.speech_enabled.isChecked(), "speech_source": self.speech_source.currentData(),
             "speech_model": self.speech_model.currentData(), "speech_lang": self.speech_lang.currentData(),
             "ui_language": self.ui_language,
@@ -637,36 +707,6 @@ class Panel(QWidget):
         except Exception as e:
             self.pack_status.emit(t("download_failed", err=e))
         self.pack_finished.emit()
-
-    def install_llm(self):
-        url, model = self.llm_url.text().strip(), self.llm_model.text().strip()
-        if not llm_setup.is_local(url):
-            self.state.setText(t("llm_local_only"))
-            return
-        box = QMessageBox(self)
-        box.setWindowTitle(t("llm_title"))
-        box.setText(t("llm_text", model=model))
-        yes = box.addButton(t("btn_install"), QMessageBox.AcceptRole)
-        box.addButton(t("btn_not_now"), QMessageBox.RejectRole)
-        box.exec()
-        if box.clickedButton() is not yes:
-            return
-        self.llm_install.setEnabled(False)
-
-        def run():
-            try:
-                llm_setup.setup(url, model, self.pack_status.emit)
-                self.pack_status.emit(t("llm_ready"))
-                self.llm_done.emit(True)
-            except Exception as e:
-                self.pack_status.emit(t("llm_failed", err=e))
-                self.llm_done.emit(False)
-        threading.Thread(target=run, daemon=True).start()
-
-    def _llm_installed(self, ok):
-        self.llm_install.setEnabled(True)
-        if ok:
-            self.llm.setChecked(True)
 
     def check_for_updates(self, quiet=True):
         """Look for a newer release in the background; offers it if there is one."""
@@ -819,6 +859,7 @@ def main():
     overlay.show()
     chip = CoverChip(overlay)  # noqa: F841 (kept alive; shows itself when a translation covers text)
     worker = Worker(langs)
+    worker.overlay_rects = overlay.painted_rects
     worker.background.connect(lambda b: overlay.set_background(*b))
     overlay.set_capture_hidden(worker.settings["hide_from_capture"])
     speech = SpeechWorker()

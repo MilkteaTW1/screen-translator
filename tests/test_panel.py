@@ -91,3 +91,14 @@ def test_screen_and_speech_translation_switch_on_and_off_independently(monkeypat
     panel.speech_toggle.click()
     assert not panel.speech_enabled.isChecked() and panel.speech_toggle.text() == "Start speech translation"
     assert appmod.json.loads((tmp_path / "settings.json").read_text(encoding="utf-8"))["speech_enabled"] is False
+
+
+def test_a_paragraph_that_grows_while_it_scrolls_in_keeps_its_translation_until_the_new_one_is_ready():
+    old = "If you are looking to improve your English conversational"
+    assert appmod._grows(old, old + " skills or just trying to refine what you already know.")
+    assert not appmod._grows(old, "Something else entirely, with no words in common here.")
+    track = {"seen": 2, "done": False, "translation": None, "stale": "舊譯文"}
+    assert appmod._visible(track) == "舊譯文"
+    track.update(done=True, translation="新譯文")
+    assert appmod._visible(track) == "新譯文"
+    assert appmod._visible({**track, "seen": 1}) is None

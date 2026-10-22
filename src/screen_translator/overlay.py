@@ -31,6 +31,10 @@ class Overlay(QWidget):
         self.luma_origin = (0, 0)
         self.hide_covers = False  # translations laid over text can be switched off with the chip
         self.has_covers = False
+        self.painted = []  # (x0, y0, x1, y1) in physical pixels of every translation box currently drawn
+
+    def painted_rects(self):
+        return self.painted
 
     def set_capture_hidden(self, hidden):
         """Hidden: screenshots (and our own OCR) never see the translations. Shown: users can
@@ -79,6 +83,7 @@ class Overlay(QWidget):
         p.setRenderHint(QPainter.Antialiasing)
         p.setRenderHint(QPainter.TextAntialiasing)
         self.drawn = {}
+        painted = []
         k = self.scale
         srcs = [(QRectF(x / k, y / k, w / k, h / k), text, lh / k) for x, y, w, h, text, lh in self.items]
         placed = []  # translation boxes already placed (logical pixels)
@@ -95,12 +100,14 @@ class Overlay(QWidget):
             self.drawn[text] = rect
             if mode == "cover" and self.hide_covers:
                 continue
+            painted.append((rect.left() * k, rect.top() * k, rect.right() * k, rect.bottom() * k))
             p.setPen(Qt.NoPen)
             p.setBrush(QColor(20, 20, 20, 245 if mode == "cover" else 225))
             p.drawRoundedRect(rect, 4, 4)
             p.setFont(font)
             p.setPen(QColor(255, 235, 140))
             p.drawText(rect.adjusted(6, 0, -6, 0), Qt.AlignVCenter | Qt.AlignLeft | Qt.TextWordWrap, text)
+        self.painted = painted
         covers = any(m == "cover" for m in self.modes.values())
         if covers != self.has_covers:
             self.has_covers = covers
@@ -185,24 +192,37 @@ class CaptionOverlay(QWidget):
         self.setGeometry(geo.x() + (geo.width() - self.width_px) // 2, geo.y() + geo.height() - 340,
                          self.width_px, 330)
         self.lines = []  # (time, said, translation)
+        self.live = None  # (said, translation) of the sentence still being spoken
         self.timer = QTimer(self)
         self.timer.timeout.connect(self._expire)
         self.timer.start(1000)
 
     def add(self, said, translation):
+        """A finished sentence: it replaces the live line."""
+        self.live = None
         self.lines = (self.lines + [(time.monotonic(), said, translation)])[-self.MAX_LINES:]
         self.show()
         self.update()
 
+    def set_live(self, said, translation):
+        """The sentence so far, updated as it is spoken ('' removes it)."""
+        self.live = (said, translation) if said else None
+        if self.live:
+            self.show()
+        elif not self.lines:
+            self.hide()
+        self.update()
+
     def clear(self):
         self.lines = []
+        self.live = None
         self.hide()
 
     def _expire(self):
         keep = [l for l in self.lines if time.monotonic() - l[0] < self.LIFETIME]
         if len(keep) != len(self.lines):
             self.lines = keep
-            if not keep:
+            if not keep and not self.live:
                 self.hide()
             self.update()
 
@@ -215,7 +235,10 @@ class CaptionOverlay(QWidget):
         tr_font.setPixelSize(22)
         inner = self.width_px - 24
         y = self.height() - 6
-        for _t, said, translation in reversed(self.lines):  # newest at the bottom
+        shown = [(said, translation) for _t, said, translation in self.lines]
+        if self.live:
+            shown.append(self.live)  # the sentence being spoken is the newest line, at the bottom
+        for said, translation in reversed(shown):
             rows = [(translation, tr_font, QColor(255, 235, 140)), (said, said_font, QColor(200, 200, 200))]
             rows = [(t, f, c) for t, f, c in rows if t]
             heights = [QFontMetricsF(f).boundingRect(QRectF(0, 0, inner, 10000), int(Qt.TextWordWrap), t).height()

@@ -46,3 +46,13 @@ def test_a_page_change_moves_nothing():
     y = t["y"]
     assert tracking.follow([t], page(100), other) is None
     assert t["y"] == y
+
+
+def test_a_block_hidden_under_our_own_box_goes_with_the_scroll_and_our_boxes_do_not_confuse_the_measurement():
+    prev, cur = page(100), page(160)
+    cover = (0, 100, 600, 300)  # our own box: drawn at the same place in both pictures
+    for img in (prev, cur):
+        img[100:300, 0:600] = 20
+    hidden = {**block(4, 100), "covered": True}
+    got = tracking.follow([hidden], prev, cur, ignore=[cover])
+    assert got == (0, -60) and hidden["y"] == block(4, 160)["y"] and hidden["followed"]

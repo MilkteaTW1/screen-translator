@@ -56,6 +56,8 @@ def _refine(tracks, prev, cur, dx, dy):
     h, w = prev.shape
     probes = []
     for t in sorted(tracks, key=lambda t: -t["w"] * t["h"]):
+        if t.get("covered"):
+            continue  # what is drawn there is our own box, not the page
         x0, y0, x1, y1 = _box(t)
         if x0 < 0 or y0 < 0 or x1 > w or y1 > h or x1 - x0 < 20 or y1 - y0 < 8:
             continue
@@ -77,13 +79,20 @@ def _refine(tracks, prev, cur, dx, dy):
     return best_dx, best_dy
 
 
-def follow(tracks, prev, cur):
+def follow(tracks, prev, cur, ignore=()):
     """Move each track (dicts with x, y, w, h in screen pixels) with the content it sits on. `prev` and `cur` are
-    consecutive full-size grayscale screenshots (2-D uint8). Returns the (dx, dy) the picture shifted by, (0, 0) if
-    it moved too little to measure yet, or None when it did not simply shift (a page change, a video)."""
+    consecutive full-size grayscale screenshots (2-D uint8); `ignore` are boxes (x0, y0, x1, y1) that are our own
+    drawing, which stays put while the page scrolls and would hide the shift. Returns the (dx, dy) the picture
+    shifted by, (0, 0) if it moved too little to measure yet, or None when it did not simply shift (a page change,
+    a video)."""
     if not tracks or prev.shape != cur.shape:
         return None
-    dx, dy, peak = estimate_shift(shrink(prev), shrink(cur))
+    small_prev, small_cur = shrink(prev), shrink(cur)
+    for x0, y0, x1, y1 in ignore:  # paint our own boxes out of both pictures
+        area = (slice(max(0, int(y0) // COARSE), max(0, int(y1) // COARSE + 1)),
+                slice(max(0, int(x0) // COARSE), max(0, int(x1) // COARSE + 1)))
+        small_prev[area], small_cur[area] = small_prev.mean(), small_cur.mean()
+    dx, dy, peak = estimate_shift(small_prev, small_cur)
     if peak < MIN_PEAK:
         return None
     if dx == 0 and dy == 0:
@@ -94,9 +103,16 @@ def follow(tracks, prev, cur):
         box = _box(t)
         if box[2] <= box[0] or box[3] <= box[1]:
             continue
+        if t.get("covered"):  # hidden under our own box: its pixels say nothing, so it goes with the picture
+            t["x"] += dx
+            t["y"] += dy
+            t["followed"] = True
+            moved += 1
+            continue
         go, stay = _error(prev, cur, box, dx, dy), _error(prev, cur, box, 0, 0)
         if go is not None and go < MAX_ERROR and (stay is None or go < 0.7 * stay):
             t["x"] += dx
             t["y"] += dy
+            t["followed"] = True
             moved += 1
     return (dx, dy) if moved else None

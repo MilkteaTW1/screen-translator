@@ -21,13 +21,15 @@ CHUNK = 1600  # 0.1 s of audio per read
 MODEL_DIR = Path(os.environ.get("APPDATA", Path.home())) / "ScreenTranslator" / "whisper"
 HF_CACHE = Path.home() / ".cache" / "huggingface" / "hub"
 # Multilingual Whisper models (Systran/faster-whisper-<name>) and their download size in MB.
-MODELS = {"tiny": 75, "base": 145, "small": 485}
+MODELS = {"tiny": 75, "base": 145}
+REPOS = {name: f"Systran/faster-whisper-{name}" for name in MODELS}
 SILENCE_END = 0.7  # seconds of quiet that end an utterance
 SOFT_SEGMENT = 5.0  # seconds: after this, even a short pause ends the utterance (long speech is cut between words)
 SOFT_PAUSE = 0.25
 MAX_SEGMENT = 12.0  # seconds: cut here whatever happens so captions keep up
 MIN_SPEECH = 0.4  # seconds: shorter sounds are clicks, not speech
 MAX_BACKLOG = 3  # utterances waiting for transcription; older ones are dropped to stay real-time
+PARTIAL_STEP = 0.8  # seconds of new speech between live updates of the sentence being spoken
 
 
 def whisper_model_class():
@@ -46,7 +48,7 @@ def find_model(name):
     own = MODEL_DIR / name
     if (own / "model.bin").is_file():
         return own
-    for snap in sorted((HF_CACHE / f"models--Systran--faster-whisper-{name}" / "snapshots").glob("*")):
+    for snap in sorted((HF_CACHE / ("models--" + REPOS[name].replace("/", "--")) / "snapshots").glob("*")):
         if (snap / "model.bin").is_file():
             return snap
     return None
@@ -66,7 +68,7 @@ def download_model(name):
     os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
     from huggingface_hub import snapshot_download
     MODEL_DIR.mkdir(parents=True, exist_ok=True)
-    snapshot_download(f"Systran/faster-whisper-{name}", local_dir=str(MODEL_DIR / name),
+    snapshot_download(REPOS[name], local_dir=str(MODEL_DIR / name),
                       allow_patterns=["config.json", "model.bin", "tokenizer.json", "vocabulary.*", "preprocessor_config.json"])
 
 
@@ -111,6 +113,14 @@ class Segmenter:
         self.buf = []
         self.speech = 0.0
         self.quiet = 0.0
+        self.fresh = 0.0  # seconds heard since the last live update
+
+    def snapshot(self):
+        """The sentence so far (a float32 array) when enough new speech has come in for a live update, else None."""
+        if not self.buf or self.speech < MIN_SPEECH or self.fresh < PARTIAL_STEP:
+            return None
+        self.fresh = 0.0
+        return np.concatenate(self.buf)
 
     def feed(self, chunk):
         """Returns a finished utterance (float32 array) or None."""
@@ -122,8 +132,9 @@ class Segmenter:
             return None
         if not self.buf:
             self.buf = list(self.pre)
-            self.speech = self.quiet = 0.0
+            self.speech = self.quiet = self.fresh = 0.0
         self.buf.append(chunk)
+        self.fresh += len(chunk) / SAMPLE_RATE
         if loud:
             self.speech += len(chunk) / SAMPLE_RATE
             self.quiet = 0.0
@@ -139,10 +150,10 @@ class Segmenter:
         return None
 
 
-def transcribe(model, audio, language=None):
+def transcribe(model, audio, language=None, beam=1):
     """(text, info) for one utterance."""
     segments, info = model.transcribe(
-        normalize(audio), language=language, beam_size=1, vad_filter=False, condition_on_previous_text=False,
+        normalize(audio), language=language, beam_size=beam, vad_filter=False, condition_on_previous_text=False,
         no_speech_threshold=0.6, without_timestamps=True)
     parts = [seg for seg in segments if seg.no_speech_prob < 0.6 and seg.avg_logprob > -1.5]
     return clean_text(" ".join(seg.text for seg in parts)), info
@@ -150,6 +161,7 @@ def transcribe(model, audio, language=None):
 
 class SpeechWorker(QObject):
     line = Signal(str, str)  # what was said, its translation ("" when there is none)
+    partial = Signal(str, str)  # the same for the sentence still being spoken: shown live, replaced by `line`
     status = Signal(str)
 
     def __init__(self):
@@ -159,10 +171,12 @@ class SpeechWorker(QObject):
         self.settings = {}
         self.audio = queue.Queue()
         self.utterances = queue.Queue()
+        self.live = None  # (epoch, audio of the sentence so far): only the latest is kept
+        self.epoch = 0  # counts finished sentences, so a late live update of a finished one is dropped
 
     def configure(self, settings):
         self.settings = settings
-        self.translator.llm = (settings["llm_url"], settings["llm_model"]) if settings["llm_enabled"] else None
+        self.translator.google = bool(settings.get("use_google", True))
         self.translator.clear()
 
     def start(self):
@@ -199,7 +213,13 @@ class SpeechWorker(QObject):
             except queue.Empty:
                 continue
             utterance = seg.feed(chunk)
-            if utterance is not None:
+            if utterance is None:
+                snap = seg.snapshot()
+                if snap is not None:
+                    self.live = (self.epoch, snap)
+            else:
+                self.epoch += 1
+                self.live = None
                 while self.utterances.qsize() >= MAX_BACKLOG:
                     try:
                         self.utterances.get_nowait()
@@ -222,28 +242,46 @@ class SpeechWorker(QObject):
         self.status.emit(t("speech_listening"))
         while self.running:
             try:
-                audio = self.utterances.get(timeout=0.5)
+                audio = self.utterances.get(timeout=0.1)
             except queue.Empty:
+                self._show_live(model)  # nothing finished: work on the sentence being spoken
                 continue
             try:
                 self._handle(model, audio)
             except Exception as e:
                 self.status.emit(t("speech_error", err=e))
 
+    def _translate(self, text, code):
+        s = self.settings
+        target = s["target"]
+        if code == target.split("-")[0].lower():
+            return ""
+        glossary = [t.strip() for t in s["glossary"].splitlines() if t.strip()]
+        translation = self.translator.translate(
+            text, {"zh": "zh-CN"}.get(code, code), target, code, glossary, s["auto_proper"], s["keep_katakana"]) or ""
+        if not translation and self.translator.missing_packs:
+            need = ", ".join(f"{a}→{b}" for a, b in sorted(self.translator.missing_packs))
+            self.status.emit(t("speech_packs_needed", names=need))
+        return translation
+
+    def _show_live(self, model):
+        """Words as they are spoken: transcribe the sentence so far and show it (and its translation) right away.
+        When the sentence ends, _handle redoes it with more care and that version replaces this one."""
+        live, self.live = self.live, None
+        if live is None:
+            return
+        epoch, audio = live
+        language = None if self.settings["speech_lang"] == "auto" else self.settings["speech_lang"]
+        text, info = transcribe(model, audio, language)
+        if not text or epoch != self.epoch:  # the sentence ended while we were working: its final version is coming
+            return
+        self.partial.emit(text, self._translate(text, info.language))
+
     def _handle(self, model, audio):
         s = self.settings
         language = None if s["speech_lang"] == "auto" else s["speech_lang"]
-        text, info = transcribe(model, audio, language)
+        text, info = transcribe(model, audio, language, beam=2)  # the finished sentence gets the careful pass
         if not text:
+            self.partial.emit("", "")  # nothing real was said: drop the live line
             return
-        code = info.language
-        target = s["target"]
-        translation = ""
-        if code != target.split("-")[0].lower():
-            glossary = [t.strip() for t in s["glossary"].splitlines() if t.strip()]
-            translation = self.translator.translate(
-                text, {"zh": "zh-CN"}.get(code, code), target, code, glossary, s["auto_proper"], s["keep_katakana"]) or ""
-            if not translation and self.translator.missing_packs:
-                need = ", ".join(f"{a}→{b}" for a, b in sorted(self.translator.missing_packs))
-                self.status.emit(t("speech_packs_needed", names=need))
-        self.line.emit(text, translation)
+        self.line.emit(text, self._translate(text, info.language))

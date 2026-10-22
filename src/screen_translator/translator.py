@@ -1,7 +1,10 @@
-"""Offline translation (Argos Translate, or a local LLM server) with proper-noun protection."""
+"""Translation (Google Translate, with offline Argos Translate as the backup) and proper-noun protection."""
 import json
 import re
+import time
+import urllib.parse
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 
 from . import packs
 
@@ -182,38 +185,30 @@ def restore(text, originals):
     return re.sub(r"\s+", " ", PLACEHOLDER_RE.sub(sub, text)).strip()
 
 
-LLM_PROMPT = (
-    "Translate the user's {src} text into {dst}. Keep every token like Z0Z, Z1Z exactly as written. "
-    "Reply with the translation only, no notes."
-)
-
-
 def language_name(code):
     names = {v: k for k, v in LANGUAGES.items()}
     return names.get(code, names.get({"zh": "zh-CN"}.get(code, code), code)).title()
 
 
-def llm_translate(text, src, dst, url, model, timeout=30):
-    """Translate with any OpenAI-compatible server running on this machine (Ollama, LM Studio, llama.cpp...)."""
-    body = json.dumps({
-        "model": model, "temperature": 0, "stream": False,
-        "messages": [
-            {"role": "system", "content": LLM_PROMPT.format(src=language_name(src), dst=language_name(dst))},
-            {"role": "user", "content": text},
-        ],
-    }).encode()
-    req = urllib.request.Request(url.rstrip("/") + "/chat/completions", body,
-                                 {"Content-Type": "application/json"})
+def google_translate(text, src, dst, timeout=8):
+    """Google Translate (the free web endpoint). The text is sent to Google."""
+    query = urllib.parse.urlencode({"client": "gtx", "sl": "auto" if src == "auto" else src, "tl": dst,
+                                    "dt": "t", "q": text})
+    req = urllib.request.Request("https://translate.googleapis.com/translate_a/single?" + query,
+                                 headers={"User-Agent": "Mozilla/5.0"})
     with urllib.request.urlopen(req, timeout=timeout) as r:
-        out = json.load(r)["choices"][0]["message"]["content"]
-    return re.sub(r"<think>.*?</think>", "", out, flags=re.S).strip()
+        data = json.load(r)
+    return "".join(part[0] for part in data[0] if part and part[0])
 
 
 class Translator:
+    RETRY_AFTER = 30.0  # seconds without trying Google again after it failed (offline, blocked...)
+
     def __init__(self):
         self.cache = {}
+        self.google = False  # use Google Translate first, the offline engine is the fallback
+        self._google_down = 0.0  # time of the last failure
         self.missing_packs = set()  # Argos packs we needed but don't have
-        self.llm = None  # (url, model) of a local LLM server to use instead of Argos, or None
         self.engine = "offline"  # engine used for the most recent translation
 
     def _argos_many(self, texts, src, dst):
@@ -227,6 +222,23 @@ class Translator:
             if pair[0] != pair[1]:
                 texts = packs.translate_many(texts, *pair)
         return texts
+
+    def _google_many(self, items, src, dst):
+        """{index: translation} for the items Google could do; nothing when it is unreachable."""
+        if time.monotonic() - self._google_down < self.RETRY_AFTER:
+            return {}
+
+        def one(item):
+            try:
+                return item[0], google_translate(item[2], src, dst)
+            except Exception:
+                return item[0], None
+
+        with ThreadPoolExecutor(max_workers=6) as pool:
+            done = dict(pool.map(one, items))
+        if items and not any(done.values()):
+            self._google_down = time.monotonic()
+        return {i: out for i, out in done.items() if out}
 
     def clear(self):
         self.cache.clear()
@@ -263,23 +275,19 @@ class Translator:
                 continue
             todo.append((i, text, protected, originals))
         outs = {}
-        if self.llm:
-            for i, text, protected, originals in todo:
-                try:
-                    outs[i] = llm_translate(protected, src, dst, *self.llm)
-                    self.engine = "llm"
-                except Exception:
-                    pass  # server not running: fall back to Argos
+        if self.google:
+            outs = self._google_many(todo, src, dst)
+            if outs:
+                self.engine = "google"
         rest = [item for item in todo if not outs.get(item[0])]
-        for item in rest:
-            outs.pop(item[0], None)  # an empty answer from the LLM counts as none
         if rest:
+            engine = self.engine if len(rest) < len(todo) else "offline"
             try:
                 for item, out in zip(rest, self._argos_many([item[2] for item in rest], src, dst)):
                     outs[item[0]] = out
             except Exception:
                 pass  # left out of `outs`: not cached, so they are tried again
-            self.engine = "offline"
+            self.engine = engine
         for i, text, protected, originals in todo:
             if i not in outs:
                 continue
