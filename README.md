@@ -2,10 +2,13 @@
 
 **English** | [繁體中文](#screen-translator-螢幕翻譯)
 
-A free, fully offline screen translator for Windows. It reads the text on your screen with the built-in
-Windows OCR, translates it locally with [Argos Translate](https://github.com/argosopentech/argos-translate),
+![Screen Translator in action](docs/promo.gif)
+
+A free screen translator for Windows (and Android). It reads the text on your screen with the built-in
+Windows OCR, translates it with Google Translate (or fully offline with
+[Argos Translate](https://github.com/argosopentech/argos-translate) when there is no internet or you turn Google off),
 and draws the translation in a click-through overlay directly **above** each text block, centred on it.
-Nothing is sent over the network and your normal use of the computer is not disturbed.
+Your normal use of the computer is not disturbed.
 
 ## Features
 
@@ -113,9 +116,11 @@ MIT
 
 [English](#screen-translator) | **繁體中文**
 
-免費、完全離線的 Windows 螢幕翻譯工具。它用 Windows 內建 OCR 讀取螢幕上的文字,
-再用 [Argos Translate](https://github.com/argosopentech/argos-translate) 在本機翻譯,
-並把譯文顯示在每個文字區塊的**正上方**(水平置中)。整個過程不連網,
+![Screen Translator 實際操作](docs/promo.gif)
+
+免費的 Windows(與 Android)螢幕翻譯工具。它用 Windows 內建 OCR 讀取螢幕上的文字,
+用 Google 翻譯翻譯(沒有網路或關掉 Google 時,改用 [Argos Translate](https://github.com/argosopentech/argos-translate) 完全離線翻譯),
+並把譯文顯示在每個文字區塊的**正上方**(水平置中)。
 半透明覆蓋層可點穿,不影響你平常操作電腦。
 
 ## 功能
