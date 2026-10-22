@@ -84,6 +84,7 @@ def load_settings():
 class Worker(QObject):
     results = Signal(list)
     status = Signal(str)
+    background = Signal(tuple)
 
     def __init__(self, langs):
         super().__init__()
