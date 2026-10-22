@@ -235,7 +235,7 @@ class Translator:
         self.google = False  # use Google Translate first, the offline engine is the fallback
         self._google_down = 0.0  # time of the last failure
         self.missing_packs = set()  # Argos packs we needed but don't have
-        self.engine = "offline"  # engine used for the most recent translation
+        self.engine = None  # engine used for the most recent translation (None: nothing translated yet)
 
     def _argos_many(self, texts, src, dst):
         """Translate offline, all texts in one batch. Returns None per text (and records what's missing) if packs aren't installed."""

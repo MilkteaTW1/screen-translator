@@ -22,6 +22,10 @@ class Prefs(context: Context) {
         get() = sp.getBoolean("skipNames", true)
         set(v) = sp.edit().putBoolean("skipNames", v).apply()
 
+    var useGoogle: Boolean
+        get() = sp.getBoolean("useGoogle", true)
+        set(v) = sp.edit().putBoolean("useGoogle", v).apply()
+
     var screenText: Boolean
         get() = sp.getBoolean("screenText", true)
         set(v) = sp.edit().putBoolean("screenText", v).apply()

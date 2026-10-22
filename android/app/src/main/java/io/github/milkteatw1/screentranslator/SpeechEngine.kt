@@ -30,6 +30,7 @@ class SpeechEngine(
     private val lang: Lang,
     private val target: Lang,
     private val glossary: List<String>,
+    private val useGoogle: Boolean,
     private val onPartial: (String) -> Unit,
     private val onLine: (said: String, translation: String) -> Unit,
     private val onStatus: (String) -> Unit,
@@ -127,7 +128,8 @@ class SpeechEngine(
         translating.execute {
             val shown = try {
                 val (protectedText, originals) = TextRules.protect(said, glossary, false)
-                var out = Tasks.await(translator!!.translate(protectedText), 20, TimeUnit.SECONDS)
+                var out = (if (useGoogle) GoogleTranslate.translate(protectedText, target) else null)
+                    ?: Tasks.await(translator!!.translate(protectedText), 20, TimeUnit.SECONDS)
                 out = TextRules.restore(out, originals)
                 if (target.traditional) out = hansHant?.transliterate(out) ?: out
                 out

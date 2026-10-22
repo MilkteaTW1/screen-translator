@@ -64,6 +64,18 @@ class Overlay(QWidget):
         # OCR boxes wobble by a few pixels between scans. Keep the previous box when the same text
         # is still roughly where it was, so translations don't shiver.
         steady = []
+        old = {i[4]: i for i in self.items if i[4]}
+        moves = [(x - old[t][0], y - old[t][1]) for x, y, _w, _h, t, _lh in items if t in old]
+        if moves:  # everything moved together by more than a wobble: the page scrolled, follow it exactly
+            mx = sorted(m[0] for m in moves)[len(moves) // 2]
+            my = sorted(m[1] for m in moves)[len(moves) // 2]
+            if max(abs(mx), abs(my)) >= 3 and sum(abs(a - mx) <= 2 and abs(b - my) <= 2 for a, b in moves) >= 0.7 * len(moves):
+                if items != self.items:
+                    self.items = list(items)
+                    # where a translation could not go beside its text was decided on another part of the page
+                    self.modes = {t: m for t, m in self.modes.items() if m != "cover"}
+                    self.update()
+                return
         for x, y, w, h, text, lh in items:
             for ox, oy, ow, oh, otext, olh in self.items:
                 if otext == text and abs(ox - x) <= 8 and abs(oy - y) <= 8 and abs(ow - w) <= 12:
@@ -102,11 +114,12 @@ class Overlay(QWidget):
                 continue
             painted.append((rect.left() * k, rect.top() * k, rect.right() * k, rect.bottom() * k))
             p.setPen(Qt.NoPen)
-            p.setBrush(QColor(20, 20, 20, 245 if mode == "cover" else 225))
+            p.setBrush(QColor(20, 20, 20, 255 if mode == "cover" else 225))  # a cover must hide the text under it
             p.drawRoundedRect(rect, 4, 4)
             p.setFont(font)
             p.setPen(QColor(255, 235, 140))
-            p.drawText(rect.adjusted(6, 0, -6, 0), Qt.AlignVCenter | Qt.AlignLeft | Qt.TextWordWrap, text)
+            align = Qt.AlignCenter if mode == "cover" else Qt.AlignVCenter | Qt.AlignLeft  # a cover reads as a label
+            p.drawText(rect.adjusted(6, 0, -6, 0), align | Qt.TextWordWrap, text)
         self.painted = painted
         covers = any(m == "cover" for m in self.modes.values())
         if covers != self.has_covers:
@@ -126,13 +139,14 @@ class Overlay(QWidget):
         size = max(14, min(28, int(line_height * 0.85)))
         font = QFont("Microsoft JhengHei UI")
         if mode == "cover":
-            w = max(src.width(), 40)
-            while True:
-                font.setPixelSize(size)
-                th = QFontMetricsF(font).boundingRect(QRectF(0, 0, w - 12, 10000), int(Qt.TextWordWrap), text).height() + 4
-                if th <= src.height() or size <= 11:
-                    break
-                size -= 1
+            # Hide the whole source block, and keep the text readable: widen (then grow) the box rather than
+            # shrinking the letters until nobody can read them.
+            size = max(size, 15)
+            font.setPixelSize(size)
+            metrics = QFontMetricsF(font)
+            natural = metrics.horizontalAdvance(text) + 14
+            w = min(max(src.width(), 40, min(natural, src.width() * 1.6)), self.width() - src.x() - 4)
+            th = metrics.boundingRect(QRectF(0, 0, w - 12, 10000), int(Qt.TextWordWrap), text).height() + 4
             return QRectF(src.x(), src.y(), w, max(src.height(), th)), font
         font.setPixelSize(size)
         maxw = min(max(src.width(), 260), self.width() - 8)

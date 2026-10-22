@@ -132,15 +132,15 @@ class CaptureService : Service() {
 
     private fun startInForeground(projection: Boolean, microphone: Boolean) {
         val nm = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
-        nm.createNotificationChannel(NotificationChannel(CHANNEL, "Screen translation", NotificationManager.IMPORTANCE_LOW))
+        nm.createNotificationChannel(NotificationChannel(CHANNEL, getString(R.string.channel_name), NotificationManager.IMPORTANCE_LOW))
         val stop = PendingIntent.getService(
             this, 0, Intent(this, CaptureService::class.java).setAction(ACTION_STOP),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         val notification = Notification.Builder(this, CHANNEL)
             .setSmallIcon(android.R.drawable.ic_menu_search)
-            .setContentTitle("Screen Translator is running")
-            .setContentText("Tap Stop to turn translation off")
-            .addAction(Notification.Action.Builder(null, "Stop", stop).build())
+            .setContentTitle(getString(R.string.notification_title))
+            .setContentText(getString(R.string.notification_text))
+            .addAction(Notification.Action.Builder(null, getString(R.string.stop), stop).build())
             .setOngoing(true)
             .build()
         if (Build.VERSION.SDK_INT >= 29) {
@@ -240,7 +240,7 @@ class CaptureService : Service() {
 
     private fun setUpSpeech(intent: Intent) {
         val engine = SpeechEngine(
-            this, prefs.speechLanguage, tgt, glossary,
+            this, prefs.speechLanguage, tgt, glossary, prefs.useGoogle,
             onPartial = { overlay?.partial = it },
             onLine = { said, translated ->
                 synchronized(captions) {
@@ -526,7 +526,7 @@ class CaptureService : Service() {
             cache[text] = ""
             return null
         }
-        val out = try {
+        val out = (if (prefs.useGoogle) GoogleTranslate.translate(protectedText, tgt) else null) ?: try {
             Tasks.await(translator!!.translate(protectedText), 20, TimeUnit.SECONDS)
         } catch (e: Exception) {
             Log.w(TAG, "translate failed: ${e.message}")

@@ -109,8 +109,12 @@ def follow(tracks, prev, cur, ignore=()):
             t["followed"] = True
             moved += 1
             continue
+        # The page scrolled as a whole: everything goes with it, except a block whose pixels clearly stayed where
+        # they were (a fixed header or toolbar). Our own boxes drawn over a block make its pixels unreliable, so
+        # "not clearly moving" is not enough to leave it behind.
         go, stay = _error(prev, cur, box, dx, dy), _error(prev, cur, box, 0, 0)
-        if go is not None and go < MAX_ERROR and (stay is None or go < 0.7 * stay):
+        stayed = stay is not None and stay < MAX_ERROR and (go is None or stay < 0.7 * go)
+        if not stayed:
             t["x"] += dx
             t["y"] += dy
             t["followed"] = True

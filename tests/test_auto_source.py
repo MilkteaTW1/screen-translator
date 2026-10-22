@@ -84,3 +84,18 @@ def test_background_translation_does_not_block_scanning(monkeypatch):
     worker.running = False
     worker._jobs_ready.set()
     assert track["translation"] == "譯:Hello there" and not track["queued"]
+
+
+def test_translations_stay_on_screen_and_lead_while_scrolling():
+    """While the page scrolls, translations keep showing, drawn a little ahead along the scroll (each picture is
+    already late when drawn); once it stops they sit exactly on their text again."""
+    import time
+    from screen_translator import app as appmod
+    worker = appmod.Worker(appmod.LANGUAGES)
+    worker.tracks = [{"x": 0, "y": 500, "w": 10, "h": 10, "lh": 10, "text": "Hi there", "tag": "en-US",
+                      "translation": "嗨", "done": True, "seen": 2, "missed": 0}]
+    now = time.monotonic()
+    worker.scrolling_until, worker.velocity = now + 0.3, (0.0, -500.0)  # scrolling down: text moves up
+    moving = worker._snapshot(now)[0]
+    assert moving[4] == "嗨" and moving[1] == 500 - round(500 * appmod.SCROLL_LEAD)
+    assert worker._snapshot(now + 0.5)[0][1] == 500

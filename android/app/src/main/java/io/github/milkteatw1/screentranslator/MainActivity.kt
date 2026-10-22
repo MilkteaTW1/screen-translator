@@ -42,12 +42,12 @@ class MainActivity : ComponentActivity() {
             startForegroundService(intent)
             status.postDelayed({ refresh() }, 600)
         } else {
-            status.text = "Screen capture was not allowed"
+            status.text = getString(R.string.capture_denied)
         }
     }
     private val notificationLauncher = registerForActivityResult(ActivityResultContracts.RequestPermission()) { askProjection() }
     private val micLauncher = registerForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
-        if (ok) askNotification() else status.text = "Microphone permission is needed for speech"
+        if (ok) askNotification() else status.text = getString(R.string.mic_needed)
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -58,30 +58,30 @@ class MainActivity : ComponentActivity() {
             orientation = LinearLayout.VERTICAL
             setPadding(pad, pad * 2, pad, pad)
         }
-        fun label(text: String) = TextView(this).apply { this.text = text; setPadding(0, pad / 2, 0, 0) }
+        fun label(id: Int) = TextView(this).apply { text = getString(id); setPadding(0, pad / 2, 0, 0) }
 
-        column.addView(TextView(this).apply { text = "Screen Translator"; textSize = 24f })
-        column.addView(label("Screen language"))
+        column.addView(TextView(this).apply { text = getString(R.string.app_title); textSize = 24f })
+        column.addView(label(R.string.screen_language))
         val source = Spinner(this)
         source.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, Langs.sources.map { it.label })
         source.setSelection(prefs.source)
         column.addView(source)
-        column.addView(label("Translate to"))
+        column.addView(label(R.string.translate_to))
         val target = Spinner(this)
         target.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, Langs.targets.map { it.label })
         target.setSelection(prefs.target)
         column.addView(target)
 
-        column.addView(label("Refresh interval (seconds)"))
+        column.addView(label(R.string.refresh_interval))
         val interval = EditText(this).apply {
             inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
             setText((prefs.intervalMs / 1000.0).toString())
         }
         column.addView(interval)
 
-        val skip = CheckBox(this).apply { text = "Skip names and one-word labels"; isChecked = prefs.skipNames }
+        val skip = CheckBox(this).apply { text = getString(R.string.skip_names); isChecked = prefs.skipNames }
         column.addView(skip)
-        column.addView(label("Never translate these (one per line)"))
+        column.addView(label(R.string.glossary_label))
         val glossary = EditText(this).apply {
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE
             minLines = 3
@@ -89,15 +89,17 @@ class MainActivity : ComponentActivity() {
             hint = "Hatsune Miku\nNVIDIA"
         }
         column.addView(glossary)
+        val google = CheckBox(this).apply { text = getString(R.string.use_google); isChecked = prefs.useGoogle }
+        column.addView(google)
 
-        column.addView(label("What to translate"))
-        val screenBox = CheckBox(this).apply { text = "Text on the screen"; isChecked = prefs.screenText }
+        column.addView(label(R.string.what_to_translate))
+        val screenBox = CheckBox(this).apply { text = getString(R.string.screen_text); isChecked = prefs.screenText }
         column.addView(screenBox)
-        val speechBox = CheckBox(this).apply { text = "Speech (list what is heard at the bottom)"; isChecked = prefs.speech }
+        val speechBox = CheckBox(this).apply { text = getString(R.string.speech); isChecked = prefs.speech }
         column.addView(speechBox)
-        val micBox = CheckBox(this).apply { text = "Listen to the microphone instead of phone audio"; isChecked = prefs.speechMic }
+        val micBox = CheckBox(this).apply { text = getString(R.string.speech_mic); isChecked = prefs.speechMic }
         column.addView(micBox)
-        column.addView(label("Spoken language"))
+        column.addView(label(R.string.spoken_language))
         val speechLang = Spinner(this)
         speechLang.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, VoskModels.languages.map { it.label })
         speechLang.setSelection(prefs.speechLang)
@@ -108,7 +110,7 @@ class MainActivity : ComponentActivity() {
         column.addView(toggle)
         column.addView(status)
         column.addView(Button(this).apply {
-            text = "Check for updates (v${Updater.versionOf(this@MainActivity)})"
+            text = getString(R.string.check_updates, Updater.versionOf(this@MainActivity))
             setOnClickListener { checkForUpdates(manual = true) }
         })
         setContentView(ScrollView(this).apply { addView(column) })
@@ -118,6 +120,7 @@ class MainActivity : ComponentActivity() {
             prefs.target = target.selectedItemPosition
             prefs.intervalMs = ((interval.text.toString().toDoubleOrNull() ?: 1.0) * 1000).toInt().coerceAtLeast(100)
             prefs.skipNames = skip.isChecked
+            prefs.useGoogle = google.isChecked
             prefs.glossary = glossary.text.toString()
             prefs.screenText = screenBox.isChecked
             prefs.speech = speechBox.isChecked
@@ -129,7 +132,7 @@ class MainActivity : ComponentActivity() {
             override fun onItemSelected(p: AdapterView<*>?, v: View?, pos: Int, id: Long) {
                 if (first > 0) { first--; return }
                 save()
-                ensureLanguageData { status.text = "Language data ready" }
+                ensureLanguageData { status.text = getString(R.string.language_data_ready) }
             }
             override fun onNothingSelected(p: AdapterView<*>?) {}
         }
@@ -142,9 +145,9 @@ class MainActivity : ComponentActivity() {
                 startService(Intent(this, CaptureService::class.java).setAction(CaptureService.ACTION_STOP))
                 status.postDelayed({ refresh() }, 400)
             } else if (!prefs.screenText && !prefs.speech) {
-                status.text = "Choose screen text, speech, or both"
+                status.text = getString(R.string.choose_something)
             } else if (prefs.screenText && prefs.sourceLang.code == prefs.targetLang.code) {
-                status.text = "Pick two different languages"
+                status.text = getString(R.string.pick_two_languages)
             } else {
                 ensureLanguageData { ensureSpeechModel { startFlow() } }
             }
@@ -167,14 +170,14 @@ class MainActivity : ComponentActivity() {
         }
         Thread {
             val update = try { Updater.check(Updater.versionOf(this)) } catch (e: Exception) {
-                runOnUiThread { if (manual) status.text = "Could not check for updates (no connection to GitHub)" }
+                runOnUiThread { if (manual) status.text = getString(R.string.update_no_connection) }
                 return@Thread  // not recorded as a check: the next start-up tries again
             }
             prefs.lastUpdateCheck = System.currentTimeMillis()
             runOnUiThread {
                 when {
                     update != null -> offerUpdate(update)
-                    manual -> status.text = "Screen Translator is up to date"
+                    manual -> status.text = getString(R.string.up_to_date)
                 }
             }
         }.start()
@@ -183,37 +186,37 @@ class MainActivity : ComponentActivity() {
     private fun offerUpdate(update: Updater.Update) {
         val mb = if (update.size > 0) " (${update.size / 1_000_000} MB)" else ""
         AlertDialog.Builder(this)
-            .setTitle("Update available")
-            .setMessage("Screen Translator ${update.version}$mb is available. Download it now? Android will ask you to confirm the install.")
-            .setPositiveButton("Update") { _, _ -> downloadUpdate(update) }
-            .setNegativeButton("Later", null)
+            .setTitle(R.string.update_title)
+            .setMessage(getString(R.string.update_text, update.version, mb))
+            .setPositiveButton(R.string.update) { _, _ -> downloadUpdate(update) }
+            .setNegativeButton(R.string.later, null)
             .show()
     }
 
     private fun downloadUpdate(update: Updater.Update) {
-        status.text = "Downloading update 0%"
+        status.text = getString(R.string.update_progress, 0)
         Thread {
             try {
-                val file = Updater.download(this, update) { pct -> runOnUiThread { status.text = "Downloading update $pct%" } }
+                val file = Updater.download(this, update) { pct -> runOnUiThread { status.text = getString(R.string.update_progress, pct) } }
                 downloaded = file
                 runOnUiThread {
-                    status.text = if (Updater.install(this, file)) "Update downloaded"
-                    else "Allow installs from Screen Translator, then tap \"Check for updates\" again"
+                    status.text = if (Updater.install(this, file)) getString(R.string.update_downloaded)
+                    else getString(R.string.allow_installs)
                 }
             } catch (e: Exception) {
-                runOnUiThread { status.text = "Update download failed: ${e.message}" }
+                runOnUiThread { status.text = getString(R.string.update_failed, e.message ?: "") }
             }
         }.start()
     }
 
     private fun refresh() {
-        toggle.text = if (CaptureService.running) "Stop" else "Start"
-        status.text = if (CaptureService.running) "Running" else "Stopped"
+        toggle.text = getString(if (CaptureService.running) R.string.stop else R.string.start)
+        status.text = getString(if (CaptureService.running) R.string.running else R.string.stopped)
     }
 
     private fun startFlow() {
         if (!Settings.canDrawOverlays(this)) {
-            Toast.makeText(this, "Allow \"Display over other apps\", then press Start again", Toast.LENGTH_LONG).show()
+            Toast.makeText(this, R.string.allow_overlay, Toast.LENGTH_LONG).show()
             startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")))
             return
         }
@@ -250,26 +253,27 @@ class MainActivity : ComponentActivity() {
         val model = VoskModels.forLang(prefs.speechLanguage)
         if (VoskModels.isInstalled(this, model)) { onReady(); return }
         AlertDialog.Builder(this)
-            .setTitle("Download speech model?")
-            .setMessage("Listening in ${prefs.speechLanguage.label} needs an offline speech model (about ${model.megabytes} MB, downloaded once). How do you want to download?")
-            .setPositiveButton("Wi-Fi only") { _, _ -> downloadModel(model, true, onReady) }
-            .setNeutralButton("Any network") { _, _ -> downloadModel(model, false, onReady) }
-            .setNegativeButton("Not now") { _, _ -> status.text = "Speech model needed for ${prefs.speechLanguage.label}" }
+            .setTitle(R.string.speech_model_title)
+            .setMessage(getString(R.string.speech_model_text, prefs.speechLanguage.label, model.megabytes))
+            .setPositiveButton(R.string.wifi_only) { _, _ -> downloadModel(model, true, onReady) }
+            .setNeutralButton(R.string.any_network) { _, _ -> downloadModel(model, false, onReady) }
+            .setNegativeButton(R.string.not_now) { _, _ -> status.text = getString(R.string.speech_model_needed, prefs.speechLanguage.label) }
             .show()
     }
 
     private fun downloadModel(model: VoskModel, wifiOnly: Boolean, onReady: () -> Unit) {
-        status.text = "Downloading speech model ..."
+        status.text = getString(R.string.speech_model_downloading)
         VoskModels.download(this, model, wifiOnly,
-            progress = { pct -> runOnUiThread { status.text = "Downloading speech model $pct%" } },
+            progress = { pct -> runOnUiThread { status.text = getString(R.string.speech_model_progress, pct) } },
             done = { err -> runOnUiThread {
-                if (err == null) { status.text = "Speech model ready"; onReady() }
-                else status.text = "Download failed: ${err.message}"
+                if (err == null) { status.text = getString(R.string.speech_model_ready); onReady() }
+                else status.text = getString(R.string.download_failed, err.message ?: "")
             } })
     }
 
     /** Translation needs a language-data file per non-English language (about 30 MB). The user decides how to get it. */
     private fun ensureLanguageData(onReady: () -> Unit) {
+        if (prefs.useGoogle) { onReady(); return }  // Google Translate needs no download; offline data is only the backup
         val langs = mutableListOf(prefs.targetLang.code)
         if (prefs.screenText) langs += prefs.sourceLang.code
         if (prefs.speech) langs += prefs.speechLanguage.code
@@ -279,16 +283,16 @@ class MainActivity : ComponentActivity() {
             val haveCodes = have.map { it.language }.toSet()
             val missing = needed.filter { it !in haveCodes }
             if (missing.isEmpty()) onReady() else askDownload(missing, onReady)
-        }.addOnFailureListener { status.text = "Could not check language data: ${it.message}" }
+        }.addOnFailureListener { status.text = getString(R.string.language_data_check_failed, it.message ?: "") }
     }
 
     private fun askDownload(missing: List<String>, onReady: () -> Unit) {
         AlertDialog.Builder(this)
-            .setTitle("Download language data?")
-            .setMessage("Offline translation needs: ${missing.joinToString { name(it) }} (about 30 MB each, downloaded once). How do you want to download?")
-            .setPositiveButton("Wi-Fi only") { _, _ -> download(missing, true, onReady) }
-            .setNeutralButton("Any network") { _, _ -> download(missing, false, onReady) }
-            .setNegativeButton("Not now") { _, _ -> status.text = "Language data needed: ${missing.joinToString { name(it) }}" }
+            .setTitle(R.string.language_data_title)
+            .setMessage(getString(R.string.language_data_text, missing.joinToString { name(it) }))
+            .setPositiveButton(R.string.wifi_only) { _, _ -> download(missing, true, onReady) }
+            .setNeutralButton(R.string.any_network) { _, _ -> download(missing, false, onReady) }
+            .setNegativeButton(R.string.not_now) { _, _ -> status.text = getString(R.string.language_data_needed, missing.joinToString { name(it) }) }
             .show()
     }
 
@@ -298,11 +302,11 @@ class MainActivity : ComponentActivity() {
         val conditions = DownloadConditions.Builder().apply { if (wifiOnly) requireWifi() }.build()
         val manager = RemoteModelManager.getInstance()
         var left = codes.size
-        status.text = "Downloading ${codes.joinToString { name(it) }} ..."
+        status.text = getString(R.string.language_data_downloading, codes.joinToString { name(it) })
         for (code in codes) {
             manager.download(TranslateRemoteModel.Builder(code).build(), conditions)
-                .addOnSuccessListener { if (--left == 0) { status.text = "Language data downloaded"; onReady() } }
-                .addOnFailureListener { status.text = "Download failed: ${it.message}" }
+                .addOnSuccessListener { if (--left == 0) { status.text = getString(R.string.language_data_downloaded); onReady() } }
+                .addOnFailureListener { status.text = getString(R.string.download_failed, it.message ?: "") }
         }
     }
 }

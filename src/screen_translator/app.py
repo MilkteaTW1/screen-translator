@@ -44,6 +44,9 @@ DEFAULTS = {
 }
 MAX_BLOCKS = 40  # most text blocks translated per screen pass
 BATCH = 8  # blocks translated together (one engine call) and shown together
+SCROLL_SETTLE = 0.35  # seconds the page must stay still after scrolling before it is read again
+SCROLL_READ_EVERY = 0.8  # seconds between reads while the page keeps scrolling
+SCROLL_LEAD = 0.06  # seconds: while scrolling, boxes are drawn this far ahead (a screenshot is already late when drawn)
 POLL = 0.08  # seconds between cheap looks at the screen (grab + compare is ~30 ms); a scan starts when it changed
 CONFIRM_GAP = 0.1  # seconds before the second look that confirms newly seen text
 
@@ -139,6 +142,10 @@ class Worker(QObject):
         self._last_scan = 0.0
         self._boxes = []  # our own boxes in the picture being scanned
         self.static = False  # the screen barely changed since the previous scan
+        self.scrolling_until = 0.0  # no OCR while the page moves; it is read again once it stops
+        self.velocity = (0.0, 0.0)  # pixels per second the page is scrolling
+        self._last_follow = 0.0
+        self._settled_at = 0.0
         self.origin = (0, 0)  # top-left of the scanned area, added back so the overlay draws in screen coordinates
 
     def configure(self, settings):
@@ -235,7 +242,7 @@ class Worker(QObject):
         scrolled = False
         if changed and self.tracks and self._prev_gray is not None and not self.static:
             shift = self._follow_scroll(self._prev_gray, green, boxes, self._prev_gray_boxes)
-            scrolled = bool(shift)
+            scrolled = shift not in (None, (0, 0))  # (0, 0): nothing measurable moved
             if shift != (0, 0):  # (0, 0): too little to measure yet
                 self._prev_gray, self._prev_gray_boxes = green, boxes
             if shift is None:  # the page changed: what we cover may be gone, and we cannot see under it
@@ -244,7 +251,31 @@ class Worker(QObject):
             self._prev_gray, self._prev_gray_boxes = green, boxes
         # On a frame where the picture has just scrolled, our own boxes still sit where the text was a moment ago
         # and would cover the wrong words: wait for the next frame (a long scroll is still read once a second).
-        wait = scrolled and now - self._last_scan < 1.0
+        # While the page moves the translations go with it (drawn a little ahead, since every screenshot is already
+        # late by the time it is drawn); the page is read again once it has stopped for a moment.
+        if scrolled:
+            dt = now - self._last_follow
+            if 0 < dt < 0.5:
+                vx, vy = shift[0] / dt, shift[1] / dt
+                self.velocity = (0.5 * self.velocity[0] + 0.5 * vx, 0.5 * self.velocity[1] + 0.5 * vy)
+            else:
+                self.velocity = (0.0, 0.0)
+            self._last_follow = now
+            self.scrolling_until = now + SCROLL_SETTLE
+            # the overlay looks for empty space on the current picture, not on the one from before the scroll
+            gray = (arr[::4, ::4, :3].astype(np.int32) * (114, 587, 299)).sum(axis=2) // 1000  # B, G, R
+            self.background.emit((gray.astype(np.int16), self.origin))
+            self.results.emit(self._snapshot(now))
+        elif self.scrolling_until and now >= self.scrolling_until:
+            self.scrolling_until = 0.0
+            self.velocity = (0.0, 0.0)
+            self.dirty = True  # read the settled page once
+            self.results.emit(self._snapshot(now))
+            self._settled_at = now
+        # ... but only once our boxes are back on their text: the picture just taken still has them drawn ahead,
+        # over other lines, and reading it would give fragments that look like new text.
+        # A long scroll is still read now and then, so new text coming into view gets translated on the way.
+        wait = (now < self.scrolling_until and now - self._last_scan < SCROLL_READ_EVERY) or now - self._settled_at < 0.2
         if scan_due(changed, self.dirty, now - self._last_scan, s["interval"]) and not wait:
             self._prev, self._prev_keep, self.dirty = small, keep, False
             gray = (arr[::4, ::4, :3].astype(np.int32) * (114, 587, 299)).sum(axis=2) // 1000  # B, G, R
@@ -270,12 +301,15 @@ class Worker(QObject):
         self._others = [(x + dx, y + dy, w, h, lh) for x, y, w, h, lh in self._others]
         self.tracks = [t for t in self.tracks if t["x"] + t["w"] > 0 and t["x"] < width
                        and t["y"] + t["h"] > 0 and t["y"] < height]
-        self.results.emit(self._snapshot())
         return shift
 
-    def _snapshot(self):
-        """What the overlay draws. Lines we don't translate are included (text None) so it avoids covering them."""
+    def _snapshot(self, now=None):
+        """What the overlay draws. Lines we don't translate are included (text None) so it avoids covering them.
+        While the page scrolls, everything is drawn a little ahead along the scroll."""
         ox, oy = self.origin
+        if (time.monotonic() if now is None else now) < self.scrolling_until:
+            ox += int(round(self.velocity[0] * SCROLL_LEAD))
+            oy += int(round(self.velocity[1] * SCROLL_LEAD))
         items = [(x + ox, y + oy, w, h, None, lh) for x, y, w, h, lh in self._others]
         items += [(t["x"] + ox, t["y"] + oy, t["w"], t["h"], _visible(t), t["lh"]) for t in self.tracks]
         return items
@@ -285,7 +319,8 @@ class Worker(QObject):
         if t.missing_packs:
             need = ", ".join(f"{a}→{b}" for a, b in sorted(t.missing_packs))
             return i18n.t("status_packs_needed", names=need)
-        return i18n.t("status_running_google" if t.engine == "google" else "status_running_offline")
+        engine = t.engine or ("google" if t.google else "offline")  # nothing translated yet: the one that will be tried
+        return i18n.t("status_running_google" if engine == "google" else "status_running_offline")
 
     def _process(self, recognizer, shot, s):
         glossary = [t.strip() for t in s["glossary"].splitlines() if t.strip()]
@@ -300,7 +335,8 @@ class Worker(QObject):
             return (looks_like_source(l.text, l.tag or s["source"], l.w, l.h, s["skip_names"])
                     and argos_code(code) != argos_code(target) and not self._is_own_output(l.text))
 
-        kept = [l for l in everything if wanted(l)]
+        # a line cut off by the top or bottom edge reads as nonsense fragments: wait until it is fully in view
+        kept = [l for l in everything if wanted(l) and l.y > 3 and l.y + l.h < shot.height - 3]
         blocks = ocr.merge_paragraphs(kept)  # translate whole paragraphs, not fragments
         blocks.sort(key=lambda b: (b.y, b.x))
         kept_ids = {id(l) for l in kept}
@@ -315,6 +351,13 @@ class Worker(QObject):
         fresh, used = [], set()
         for b in blocks:
             t = self._match_track(b, used, boxes)
+            part = None if t else self._part_of(b)
+            if part is not None:  # a piece of a block we already show (our own box hid the rest): not new text
+                if id(part) not in used:
+                    used.add(id(part))
+                    part["missed"] = 0
+                    fresh.append(part)
+                continue
             if t:
                 used.add(id(t))
                 t["seen"] += 1
@@ -349,6 +392,8 @@ class Worker(QObject):
             key = (t["text"], ocr_tag_to_code(t["tag"], supported), target)
             if not t["done"] and key in self.translator.cache:
                 t["translation"], t["done"] = self.translator.cache[key], True
+                if t["translation"]:  # text we have read and translated before (it just moved): no need to confirm it
+                    t["seen"] = max(t["seen"], 2)
 
         # Translate top to bottom in small batches and show each batch as it finishes, so a
         # screen full of text fills in progressively instead of freezing until everything is done.
@@ -414,6 +459,7 @@ class Worker(QObject):
                         t["queued"] = False
                     self.status.emit(i18n.t("status_error", err=e))
                 self.results.emit(self._snapshot())
+                self.status.emit(self._status_text())  # the engine is known once something is translated
                 self.dirty = self.dirty or any(t["seen"] < 2 for t in self.tracks)
 
     def _match_track(self, block, used, boxes=()):
@@ -429,6 +475,17 @@ class Worker(QObject):
                                    or _grows(t["text"], block.text)):
                 best, best_iou = t, iou
         return best
+
+    def _part_of(self, block):
+        """The shown block this one is only a piece of (same lines, text contained in it), if any."""
+        piece = "".join(block.text.split())
+        if len(piece) < 4:
+            return None
+        for t in self.tracks:
+            if (_visible(t) is not None and piece in "".join(t["text"].split())
+                    and block.y < t["y"] + t["h"] and t["y"] < block.y + block.h):
+                return t
+        return None
 
     @staticmethod
     def _same_place(track, b):

@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- English interface text. Translations go in values-<language>/strings.xml with the same names. -->
+<resources>
+    <string name="app_title">Screen Translator</string>
+    <string name="screen_language">Screen language</string>
+    <string name="translate_to">Translate to</string>
+    <string name="refresh_interval">Refresh interval (seconds)</string>
+    <string name="skip_names">Skip names and one-word labels</string>
+    <string name="glossary_label">Never translate these (one per line)</string>
+    <string name="use_google">Use Google Translate first (sends the text to Google; offline translation is the backup)</string>
+    <string name="what_to_translate">What to translate</string>
+    <string name="screen_text">Text on the screen</string>
+    <string name="speech">Speech (list what is heard at the bottom)</string>
+    <string name="speech_mic">Listen to the microphone instead of phone audio</string>
+    <string name="spoken_language">Spoken language</string>
+    <string name="check_updates">Check for updates (v%1$s)</string>
+    <string name="start">Start</string>
+    <string name="stop">Stop</string>
+    <string name="running">Running</string>
+    <string name="stopped">Stopped</string>
+    <string name="capture_denied">Screen capture was not allowed</string>
+    <string name="mic_needed">Microphone permission is needed for speech</string>
+    <string name="language_data_ready">Language data ready</string>
+    <string name="choose_something">Choose screen text, speech, or both</string>
+    <string name="pick_two_languages">Pick two different languages</string>
+    <string name="update_no_connection">Could not check for updates (no connection to GitHub)</string>
+    <string name="up_to_date">Screen Translator is up to date</string>
+    <string name="update_title">Update available</string>
+    <string name="update_text">Screen Translator %1$s%2$s is available. Download it now? Android will ask you to confirm the install.</string>
+    <string name="update">Update</string>
+    <string name="later">Later</string>
+    <string name="update_progress">Downloading update %1$d%%</string>
+    <string name="update_downloaded">Update downloaded</string>
+    <string name="allow_installs">Allow installs from Screen Translator, then tap \"Check for updates\" again</string>
+    <string name="update_failed">Update download failed: %1$s</string>
+    <string name="allow_overlay">Allow \"Display over other apps\", then press Start again</string>
+    <string name="speech_model_title">Download speech model?</string>
+    <string name="speech_model_text">Listening in %1$s needs an offline speech model (about %2$d MB, downloaded once). How do you want to download?</string>
+    <string name="wifi_only">Wi-Fi only</string>
+    <string name="any_network">Any network</string>
+    <string name="not_now">Not now</string>
+    <string name="speech_model_needed">Speech model needed for %1$s</string>
+    <string name="speech_model_downloading">Downloading speech model …</string>
+    <string name="speech_model_progress">Downloading speech model %1$d%%</string>
+    <string name="speech_model_ready">Speech model ready</string>
+    <string name="download_failed">Download failed: %1$s</string>
+    <string name="language_data_check_failed">Could not check language data: %1$s</string>
+    <string name="language_data_title">Download language data?</string>
+    <string name="language_data_text">Offline translation needs: %1$s (about 30 MB each, downloaded once). How do you want to download?</string>
+    <string name="language_data_needed">Language data needed: %1$s</string>
+    <string name="language_data_downloading">Downloading %1$s …</string>
+    <string name="language_data_downloaded">Language data downloaded</string>
+    <string name="channel_name">Screen translation</string>
+    <string name="notification_title">Screen Translator is running</string>
+    <string name="notification_text">Tap Stop to turn translation off</string>
+</resources>
