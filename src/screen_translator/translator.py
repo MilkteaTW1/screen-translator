@@ -1,9 +1,10 @@
 """Translation (Google Translate, with offline Argos Translate as the backup) and proper-noun protection."""
 import json
+import http.client
 import re
+import threading
 import time
 import urllib.parse
-import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 
 from . import packs
@@ -190,15 +191,40 @@ def language_name(code):
     return names.get(code, names.get({"zh": "zh-CN"}.get(code, code), code)).title()
 
 
+_google_conn = threading.local()  # one kept-open connection per thread: no new TLS handshake for every request
+
+
 def google_translate(text, src, dst, timeout=8):
     """Google Translate (the free web endpoint). The text is sent to Google."""
-    query = urllib.parse.urlencode({"client": "gtx", "sl": "auto" if src == "auto" else src, "tl": dst,
-                                    "dt": "t", "q": text})
-    req = urllib.request.Request("https://translate.googleapis.com/translate_a/single?" + query,
-                                 headers={"User-Agent": "Mozilla/5.0"})
-    with urllib.request.urlopen(req, timeout=timeout) as r:
-        data = json.load(r)
+    path = "/translate_a/single?" + urllib.parse.urlencode(
+        {"client": "gtx", "sl": "auto" if src == "auto" else src, "tl": dst, "dt": "t"})
+    body = urllib.parse.urlencode({"q": text})
+    headers = {"User-Agent": "Mozilla/5.0", "Content-Type": "application/x-www-form-urlencoded"}
+    for attempt in (0, 1):
+        conn = getattr(_google_conn, "conn", None)
+        if conn is None:
+            conn = _google_conn.conn = http.client.HTTPSConnection("translate.googleapis.com", timeout=timeout)
+        try:
+            conn.request("POST", path, body, headers)
+            resp = conn.getresponse()
+            raw = resp.read()
+            if resp.status != 200:
+                raise OSError(f"Google answered {resp.status}")
+            break
+        except Exception:
+            conn.close()
+            _google_conn.conn = None  # a stale kept-open connection: retry once on a fresh one
+            if attempt:
+                raise
+    data = json.loads(raw)
     return "".join(part[0] for part in data[0] if part and part[0])
+
+
+def google_translate_group(texts, src, dst):
+    """Several short texts in one request (one per line): far fewer round trips. None if the lines don't come back 1:1."""
+    out = google_translate("\n".join(" ".join(t.split()) for t in texts), src, dst)
+    lines = out.split("\n")
+    return lines if len(lines) == len(texts) else None
 
 
 class Translator:
@@ -228,14 +254,27 @@ class Translator:
         if time.monotonic() - self._google_down < self.RETRY_AFTER:
             return {}
 
-        def one(item):
+        groups, group, size = [], [], 0
+        for item in items:  # lines that go in one request
+            if group and (len(group) >= 8 or size + len(item[2]) > 1500):
+                groups.append(group)
+                group, size = [], 0
+            group.append(item)
+            size += len(item[2])
+        if group:
+            groups.append(group)
+
+        def one(group):
             try:
-                return item[0], google_translate(item[2], src, dst)
+                lines = google_translate_group([g[2] for g in group], src, dst)
+                if lines is not None:
+                    return list(zip((g[0] for g in group), lines))
+                return [(g[0], google_translate(g[2], src, dst)) for g in group]  # lines got mixed up: one by one
             except Exception:
-                return item[0], None
+                return [(g[0], None) for g in group]
 
         with ThreadPoolExecutor(max_workers=6) as pool:
-            done = dict(pool.map(one, items))
+            done = dict(pair for part in pool.map(one, groups) for pair in part)
         if items and not any(done.values()):
             self._google_down = time.monotonic()
         return {i: out for i, out in done.items() if out}

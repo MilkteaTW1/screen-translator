@@ -1,6 +1,6 @@
 ; Inno Setup script. Build with: ISCC installer\ScreenTranslator.iss  (after build.bat has produced the PyInstaller folder)
 #define AppName "Screen Translator"
-#define AppVersion "0.5.4"
+#define AppVersion "0.5.5"
 #ifndef SourceDir
   #define SourceDir "..\dist\ScreenTranslator"
 #endif
@@ -38,6 +38,8 @@ Name: "{autodesktop}\{#AppName}"; Filename: "{app}\ScreenTranslator.exe"; Tasks:
 
 [Run]
 Filename: "{app}\ScreenTranslator.exe"; Description: "{cm:LaunchProgram,{#AppName}}"; Flags: nowait postinstall skipifsilent
+; An update runs silently: start the new version again when it is done.
+Filename: "{app}\ScreenTranslator.exe"; Flags: nowait runasoriginaluser; Check: WizardSilent
 
 [Registry]
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "ScreenTranslator"; ValueData: """{app}\ScreenTranslator.exe"" --minimized"; Tasks: autostart; Flags: uninsdeletevalue

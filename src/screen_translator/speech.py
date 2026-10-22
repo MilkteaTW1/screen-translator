@@ -21,7 +21,7 @@ CHUNK = 1600  # 0.1 s of audio per read
 MODEL_DIR = Path(os.environ.get("APPDATA", Path.home())) / "ScreenTranslator" / "whisper"
 HF_CACHE = Path.home() / ".cache" / "huggingface" / "hub"
 # Multilingual Whisper models (Systran/faster-whisper-<name>) and their download size in MB.
-MODELS = {"tiny": 75, "base": 145}
+MODELS = {"tiny": 75, "base": 145, "small": 485}
 REPOS = {name: f"Systran/faster-whisper-{name}" for name in MODELS}
 SILENCE_END = 0.7  # seconds of quiet that end an utterance
 SOFT_SEGMENT = 5.0  # seconds: after this, even a short pause ends the utterance (long speech is cut between words)

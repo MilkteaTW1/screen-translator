@@ -20,7 +20,7 @@ Nothing is sent over the network and your normal use of the computer is not dist
   (a tray option lets screenshots include translations).
 - Speech translation (Windows): listens to what the computer plays (or the microphone), transcribes it offline with
   Whisper and lists what was said with its translation in a strip at the bottom of the screen. The speech model
-  (tiny 75 MB / base 145 MB) is downloaded only after you choose: download now, use a model folder
+  (tiny 75 MB / base 145 MB / small 485 MB) is downloaded only after you choose: download now, use a model folder
   you already have (it also finds models in the Hugging Face cache), or not now.
 - Light on resources: runs at below-normal priority, 2 translation threads, no torch/spacy; starts in about a second
   and can start with Windows, minimised to the tray, translating right away.
@@ -128,7 +128,7 @@ MIT
   譯文位置只由自己的區塊決定,不會在上下左右之間跳來跳去。
 - 覆蓋層與設定視窗不會被截圖拍到,所以不會翻譯到自己的譯文(托盤選單可改成讓截圖包含譯文)。
 - 語音翻譯(Windows):聽電腦播放的聲音(或麥克風),用 Whisper 離線轉成文字,
-  並把「聽到的內容與翻譯」列在螢幕下方。語音模型(tiny 75 MB / base 145 MB)
+  並把「聽到的內容與翻譯」列在螢幕下方。語音模型(tiny 75 MB / base 145 MB / small 485 MB)
   由你決定怎麼取得:現在下載、使用你已有的模型資料夾(也會自動找 Hugging Face 快取裡的模型)、或暫不下載。
 - 低資源:以低優先權執行、翻譯只用 2 個執行緒、不含 torch/spacy,約一秒啟動,
   可開機自動啟動並縮小到系統匣、啟動即開始翻譯。

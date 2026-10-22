@@ -51,3 +51,36 @@ def test_the_worker_translates_each_block_from_its_own_language_and_skips_the_ta
     assert ("ja", "ja", ["このアプリは画面のテキストを翻訳します。"]) in asked
     assert not any("這個程式" in t for _src, _tag, texts in asked for t in texts)  # already Chinese: left alone
     assert sorted(i[4] for i in items if i[4]) == ["<en>", "<ja>"]
+
+
+def test_background_translation_does_not_block_scanning(monkeypatch):
+    """Translation waits on the network; the scan must come back at once and the result arrive later."""
+    import threading
+    import time
+    from screen_translator import app as appmod
+    release = threading.Event()
+    worker = appmod.Worker(appmod.LANGUAGES)
+    worker.settings = {**appmod.DEFAULTS}
+    worker.running, worker.background_translation = True, True
+
+    def slow(texts, *a):
+        release.wait(5)
+        return ["譯:" + t for t in texts]
+    monkeypatch.setattr(worker.translator, "translate_many", slow)
+    threading.Thread(target=worker._translate_loop, daemon=True).start()
+    track = {"x": 0, "y": 0, "w": 10, "h": 10, "lh": 10, "text": "Hello there", "tag": "en-US", "translation": None,
+             "done": False, "seen": 2, "missed": 0}
+    worker.tracks = [track]
+    start = time.monotonic()
+    worker._jobs.append([track])
+    track["queued"] = True
+    worker._jobs_ready.set()
+    assert time.monotonic() - start < 0.5 and not track["done"]  # not waiting for the translation
+    release.set()
+    for _ in range(50):
+        if track["done"]:
+            break
+        time.sleep(0.1)
+    worker.running = False
+    worker._jobs_ready.set()
+    assert track["translation"] == "譯:Hello there" and not track["queued"]

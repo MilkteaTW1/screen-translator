@@ -57,7 +57,7 @@
   "download_failed": "Download failed: {err}",
   "btn_install": "Install",
   "update_title": "Update available",
-  "update_text": "Screen Translator {version} is available (you have {current}).\nDownload and install it now? The app will close while it installs.",
+  "update_text": "Screen Translator {version} is available (you have {current}).\nDownload and install it now? The app restarts by itself when it is done.",
   "btn_update_now": "Update now",
   "btn_later": "Later",
   "update_progress": "Downloading update: {pct}%",

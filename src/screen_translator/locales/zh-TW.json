@@ -57,7 +57,7 @@
   "download_failed": "下載失敗:{err}",
   "btn_install": "安裝",
   "update_title": "有可用更新",
-  "update_text": "Screen Translator {version} 已推出(你目前是 {current})。\n要現在下載並安裝嗎?安裝時程式會關閉。",
+  "update_text": "Screen Translator {version} 已推出(你目前是 {current})。\n要現在下載並安裝嗎?完成後程式會自動重新開啟。",
   "btn_update_now": "立即更新",
   "btn_later": "稍後",
   "update_progress": "正在下載更新:{pct}%",

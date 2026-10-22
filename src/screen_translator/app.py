@@ -8,6 +8,7 @@ import winreg
 import difflib
 import json
 import os
+import subprocess
 import sys
 import threading
 import time
@@ -124,6 +125,10 @@ class Worker(QObject):
         self.running = False
         self.dirty = True
         self.thread = None
+        self.background_translation = False  # translate on a thread of its own, so scanning never waits for the network
+        self._jobs = []  # batches of tracks waiting to be translated; the newest is done first
+        self._jobs_lock = threading.Lock()
+        self._jobs_ready = threading.Event()
         self.shown = set()  # translations currently on screen, whitespace-stripped
         self.tracks = []  # text blocks followed from scan to scan: position, text, translation, times seen
         self._others = []  # (x, y, w, h, line height) of lines we do not translate: the overlay keeps clear of them
@@ -140,6 +145,8 @@ class Worker(QObject):
         self.settings = settings
         self._use_engine(settings)
         self.tracks = []
+        with self._jobs_lock:
+            self._jobs.clear()
         self.translator.clear()
         self.dirty = True
 
@@ -151,11 +158,14 @@ class Worker(QObject):
             return
         self.running = True
         self.dirty = True
+        self.background_translation = True
         self.thread = threading.Thread(target=self._loop, daemon=True)
         self.thread.start()
+        threading.Thread(target=self._translate_loop, daemon=True).start()
 
     def stop(self):
         self.running = False
+        self._jobs_ready.set()
         self.results.emit([])
 
     def _loop(self):
@@ -330,6 +340,9 @@ class Worker(QObject):
                 t["missed"] += 1
                 if self.static and t["seen"] >= 2 and t["missed"] <= 1:
                     carried.append(t)
+        # a carried block that a fresh one now sits on top of is the same text read again: one box is enough
+        carried = [t for t in carried if not any(
+            _iou((t["x"], t["y"], t["w"], t["h"]), (f["x"], f["y"], f["w"], f["h"])) > 0.5 for f in fresh)]
         self.tracks = fresh + carried
 
         for t in fresh:  # already translated earlier: straight from the cache
@@ -337,26 +350,71 @@ class Worker(QObject):
             if not t["done"] and key in self.translator.cache:
                 t["translation"], t["done"] = self.translator.cache[key], True
 
-        def update_shown():
-            self.shown = {"".join(v.split()) for v in map(_visible, self.tracks) if v}
-
         # Translate top to bottom in small batches and show each batch as it finishes, so a
         # screen full of text fills in progressively instead of freezing until everything is done.
-        update_shown()
-        todo = [t for t in fresh if not t["done"]][:MAX_BLOCKS]
-        for i in range(0, len(todo), BATCH):
-            batch = todo[i:i + BATCH]
-            for tag in dict.fromkeys(t["tag"] for t in batch):  # one engine call per source language
-                same = [t for t in batch if t["tag"] == tag]
-                args = (ocr_tag_to_code(tag, supported), target, tag, glossary, s["auto_proper"], s["keep_katakana"])
-                for t, out in zip(same, self.translator.translate_many([t["text"] for t in same], *args)):
-                    t["translation"], t["done"] = out, True
-            update_shown()
-            if i + BATCH < len(todo):
-                self.results.emit(self._snapshot())
-                if not self.running or self.dirty:  # the user changed something: restart with fresh settings
-                    break
+        self._update_shown()
+        todo = [t for t in fresh if not t["done"] and not t.get("queued")][:MAX_BLOCKS]
+        jobs = [todo[i:i + BATCH] for i in range(0, len(todo), BATCH)]
+        if self.background_translation:
+            for batch in jobs:
+                for t in batch:
+                    t["queued"] = True
+            with self._jobs_lock:
+                self._jobs.extend(reversed(jobs))  # the job taken first is the topmost batch
+            self._jobs_ready.set()
+        else:
+            for i, batch in enumerate(jobs):
+                self._translate_batch(batch, glossary, s)
+                if i + 1 < len(jobs):
+                    self.results.emit(self._snapshot())
+                    if not self.running or self.dirty:  # the user changed something: restart with fresh settings
+                        break
         return self._snapshot()
+
+    def _update_shown(self):
+        self.shown = {"".join(v.split()) for v in map(_visible, self.tracks) if v}
+
+    def _translate_batch(self, batch, glossary, s):
+        supported = set(self.langs.values())
+        for tag in dict.fromkeys(t["tag"] for t in batch):  # one engine call per source language
+            same = [t for t in batch if t["tag"] == tag]
+            texts = [t["text"] for t in same]
+            args = (ocr_tag_to_code(tag, supported), s["target"], tag, glossary, s["auto_proper"], s["keep_katakana"])
+            for t, text, out in zip(same, texts, self.translator.translate_many(texts, *args)):
+                if t["text"] == text:  # the block was read differently meanwhile: this answer is for old text
+                    t["translation"], t["done"], t["queued"] = out, True, False
+                else:
+                    t["queued"] = False
+        self._update_shown()
+
+    def _translate_loop(self):
+        while self.running:
+            self._jobs_ready.wait(1.0)
+            while self.running:
+                with self._jobs_lock:
+                    live = {id(t) for t in self.tracks}
+                    job = None
+                    while self._jobs and job is None:
+                        batch = self._jobs.pop()
+                        job = [t for t in batch if id(t) in live]  # blocks that scrolled away need no translation
+                        for t in batch:
+                            if id(t) not in live:
+                                t["queued"] = False
+                        job = job or None
+                    if not self._jobs:
+                        self._jobs_ready.clear()
+                if job is None:
+                    break
+                s = self.settings
+                glossary = [x.strip() for x in s["glossary"].splitlines() if x.strip()]
+                try:
+                    self._translate_batch(job, glossary, s)
+                except Exception as e:
+                    for t in job:
+                        t["queued"] = False
+                    self.status.emit(i18n.t("status_error", err=e))
+                self.results.emit(self._snapshot())
+                self.dirty = self.dirty or any(t["seen"] < 2 for t in self.tracks)
 
     def _match_track(self, block, used, boxes=()):
         """The earlier text block this one most likely is: overlapping area and nearly the same text (less alike is
@@ -737,7 +795,9 @@ class Panel(QWidget):
         threading.Thread(target=run, daemon=True).start()
 
     def _run_installer(self, path):
-        os.startfile(path)
+        """Install silently: the app closes, the installer replaces it and starts the new version."""
+        subprocess.Popen([path, "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/CLOSEAPPLICATIONS"],
+                         creationflags=0x00000008 | 0x00000200, close_fds=True)  # DETACHED_PROCESS | NEW_PROCESS_GROUP
         self.close()
 
     def _packs_ready(self):
