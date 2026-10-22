@@ -32,7 +32,7 @@ Nothing is sent over the network and your normal use of the computer is not dist
 
 ## Download
 
-Download `ScreenTranslator-Setup-x.y.z.exe` from the [Releases](../../releases) page and run it (about 70 MB, no admin
+Download `ScreenTranslator-Setup-x.y.z.exe` from the [latest release](../../releases/latest) and run it (about 70 MB, no admin
 rights needed; an optional task starts it with Windows). Language packs are **not** bundled: the app asks before
 downloading each one (50-100 MB), or you can import `.argosmodel` files you already have.
 
