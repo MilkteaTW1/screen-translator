@@ -216,50 +216,76 @@ class Translator:
         self.llm = None  # (url, model) of a local LLM server to use instead of Argos, or None
         self.engine = "offline"  # engine used for the most recent translation
 
-    def _argos(self, protected, src, dst):
-        """Translate offline. Returns None (and records what's missing) if packs aren't installed."""
+    def _argos_many(self, texts, src, dst):
+        """Translate offline, all texts in one batch. Returns None per text (and records what's missing) if packs aren't installed."""
         a, b = argos_code(src), argos_code(dst)
         missing = missing_pairs(src, dst)
         if a == "auto" or missing:
             self.missing_packs.update(missing)
-            return None
+            return [None] * len(texts)
         for pair in needed_pairs(src, dst) or [(a, b)]:  # via English when there is no direct pack
-            protected = packs.translate(protected, *pair) if pair[0] != pair[1] else protected
-        return protected
+            if pair[0] != pair[1]:
+                texts = packs.translate_many(texts, *pair)
+        return texts
 
     def clear(self):
         self.cache.clear()
 
     def translate(self, text, src, dst, ocr_tag, glossary, auto, keep_katakana):
-        key = (text, src, dst)
-        if key in self.cache:
-            return self.cache[key]
-        protected, originals = protect(text, glossary, ocr_tag.split("-")[0].lower(), auto, keep_katakana)
-        remaining = PLACEHOLDER_RE.sub("", protected)
-        if not any(c.isalpha() for c in remaining):
-            result = None  # the line is only proper nouns / symbols: nothing to translate
-        else:
-            try:
-                out = None
-                if self.llm:
-                    try:
-                        out = llm_translate(protected, src, dst, *self.llm)
-                        self.engine = "llm"
-                    except Exception:
-                        out = None  # server not running: fall back to Argos
-                if not out:
-                    out = self._argos(protected, src, dst)
-                    self.engine = "offline"
-                result = restore(out, originals) if out else None
-                if result and result.strip().lower() == text.strip().lower():
-                    result = None
-                # Target is Chinese/Japanese/Korean but nothing came out in it: not a translation.
-                if result and dst.split("-")[0] in ("zh", "zt", "ja", "ko") and not CJK_RE.search(result):
-                    result = None
-                # The small offline model sometimes loops ("立立立立…") on long run-on text.
-                if result and (re.search(r"(.){5,}", result) or len(result) > 4 * len(text) + 20):
-                    result = None
-            except Exception:
-                return None  # don't cache failures
-        self.cache[key] = result
+        return self.translate_many([text], src, dst, ocr_tag, glossary, auto, keep_katakana)[0]
+
+    @staticmethod
+    def _finish(text, out, originals, dst):
+        result = restore(out, originals) if out else None
+        if result and result.strip().lower() == text.strip().lower():
+            result = None
+        # Target is Chinese/Japanese/Korean but nothing came out in it: not a translation.
+        if result and dst.split("-")[0] in ("zh", "zt", "ja", "ko") and not CJK_RE.search(result):
+            result = None
+        # The small offline model sometimes loops ("立立立立…") on long run-on text.
+        if result and (re.search(r"(.)\1{5,}", result) or len(result) > 4 * len(text) + 20):
+            result = None
         return result
+
+    def translate_many(self, texts, src, dst, ocr_tag, glossary, auto, keep_katakana):
+        """Translate several texts at once. The offline engine takes them in one batch, which is far faster
+        than one call each (a screen full of text: 2.0 s one by one, 0.8 s batched)."""
+        results = [None] * len(texts)
+        todo = []  # (index, text, protected text, protected originals)
+        for i, text in enumerate(texts):
+            key = (text, src, dst)
+            if key in self.cache:
+                results[i] = self.cache[key]
+                continue
+            protected, originals = protect(text, glossary, ocr_tag.split("-")[0].lower(), auto, keep_katakana)
+            if not any(c.isalpha() for c in PLACEHOLDER_RE.sub("", protected)):
+                self.cache[key] = None  # the line is only proper nouns / symbols: nothing to translate
+                continue
+            todo.append((i, text, protected, originals))
+        outs = {}
+        if self.llm:
+            for i, text, protected, originals in todo:
+                try:
+                    outs[i] = llm_translate(protected, src, dst, *self.llm)
+                    self.engine = "llm"
+                except Exception:
+                    pass  # server not running: fall back to Argos
+        rest = [item for item in todo if not outs.get(item[0])]
+        for item in rest:
+            outs.pop(item[0], None)  # an empty answer from the LLM counts as none
+        if rest:
+            try:
+                for item, out in zip(rest, self._argos_many([item[2] for item in rest], src, dst)):
+                    outs[item[0]] = out
+            except Exception:
+                pass  # left out of `outs`: not cached, so they are tried again
+            self.engine = "offline"
+        for i, text, protected, originals in todo:
+            if i not in outs:
+                continue
+            try:
+                results[i] = self._finish(text, outs[i], originals, dst)
+            except Exception:
+                continue
+            self.cache[(text, src, dst)] = results[i]
+        return results

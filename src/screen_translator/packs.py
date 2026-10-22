@@ -17,7 +17,7 @@ INDEX_URL = "https://raw.githubusercontent.com/argosopentech/argospm-index/main/
 PACK_DIR = Path(os.environ.get("APPDATA", Path.home())) / "ScreenTranslator" / "packs"
 LEGACY_DIR = Path.home() / ".local" / "share" / "argos-translate" / "packages"
 SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?。！？])\s+|(?<=[。！？])")
-THREADS = 2  # CPU threads one translation may use: small on purpose so the app stays light
+THREADS = max(2, min(4, (os.cpu_count() or 4) // 2 - 1))  # CPU threads one translation may use: few, so the app stays light
 BEAM = 2
 
 _models = {}
@@ -55,24 +55,39 @@ def _load(pair):
     return _models[pair]
 
 
-def translate(text, src, dst):
-    """Translate one block of text with the (src, dst) pack. Sentences are translated as a batch."""
+def translate_many(texts, src, dst):
+    """Translate blocks of text with the (src, dst) pack. All their sentences go through the engine in ONE
+    call: the engine is much faster that way than one call per block."""
     translator, sp, prefix = _load((src, dst))
-    sentences = [s for s in SENTENCE_SPLIT_RE.split(text.strip()) if s.strip()]
-    if not sentences:
-        return ""
-    tokens = [sp.encode(s, out_type=str) for s in sentences]
+    split = [[s for s in SENTENCE_SPLIT_RE.split(t.strip()) if s.strip()] for t in texts]
+    flat = [s for sentences in split for s in sentences]
+    if not flat:
+        return [""] * len(texts)
+    tokens = [sp.encode(s, out_type=str) for s in flat]
     out = translator.translate_batch(
         tokens, target_prefix=[[prefix]] * len(tokens) if prefix else None, replace_unknowns=True,
         beam_size=BEAM, length_penalty=0.2, max_batch_size=1024, batch_type="tokens")
-    pieces = []
+    decoded = []
     for r in out:
         value = sp.decode_pieces(r.hypotheses[0]).replace("▁", " ").replace("_", " ")
         if prefix and value.startswith(prefix):
             value = value[len(prefix):]
-        pieces.append(value.strip())
-    joiner = "" if re.search(r"[぀-ヿ㐀-鿿]", pieces[0]) else " "
-    return re.sub(r"\s+([。，！？、：；])", r"\1", joiner.join(pieces))
+        decoded.append(value.strip())
+    results, i = [], 0
+    for sentences in split:
+        pieces = decoded[i:i + len(sentences)]
+        i += len(sentences)
+        if not pieces:
+            results.append("")
+            continue
+        joiner = "" if re.search(r"[぀-ヿ㐀-鿿]", pieces[0]) else " "
+        results.append(re.sub(r"\s+([。，！？、：；])", r"\1", joiner.join(pieces)))
+    return results
+
+
+def translate(text, src, dst):
+    """Translate one block of text with the (src, dst) pack."""
+    return translate_many([text], src, dst)[0]
 
 
 def import_file(path):

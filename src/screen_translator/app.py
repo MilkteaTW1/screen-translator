@@ -1,4 +1,8 @@
 """Screen Translator: pick source/target language, translate on-screen text in place, keep proper nouns."""
+# The translation engine must be loaded before the WinRT OCR modules (imported below, via `ocr`): when it is first
+# loaded after OCR has run, the process crashes. That happens to anyone who downloads a language pack while the app runs.
+import ctranslate2  # noqa: F401
+import sentencepiece  # noqa: F401
 import ctypes
 import winreg
 import difflib
@@ -7,7 +11,6 @@ import os
 import sys
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import mss
@@ -37,7 +40,7 @@ DEFAULTS = {
     "llm_enabled": False, "llm_url": "http://localhost:11434/v1", "llm_model": "qwen2.5:7b",
 }
 MAX_BLOCKS = 40  # most text blocks translated per screen pass
-BATCH = 5  # blocks translated between overlay refreshes
+BATCH = 8  # blocks translated together (one engine call) and shown together
 POLL = 0.08  # seconds between cheap looks at the screen (grab + compare is ~30 ms); a scan starts when it changed
 CONFIRM_GAP = 0.1  # seconds before the second look that confirms newly seen text
 
@@ -133,7 +136,6 @@ class Worker(QObject):
 
     def _loop(self):
         recognizer, prev, last_scan = None, None, 0.0
-        pool = ThreadPoolExecutor(2)
         with mss.mss() as sct:
             mon = sct.monitors[1]
             while self.running:
@@ -154,7 +156,7 @@ class Worker(QObject):
                         prev, self.dirty = small, False
                         gray = (arr[::4, ::4, :3].astype(np.int32) * (114, 587, 299)).sum(axis=2) // 1000  # B, G, R
                         self.background.emit((gray.astype(np.int16), self.origin))
-                        self.results.emit(self._process(recognizer, shot, s, pool))
+                        self.results.emit(self._process(recognizer, shot, s))
                         self.status.emit(self._status_text())
                         # Text seen only once is not shown yet: look again soon to confirm it.
                         self.dirty = self.dirty or any(t["seen"] < 2 for t in self.tracks)
@@ -171,7 +173,7 @@ class Worker(QObject):
             return f"Offline packs needed: {need} (run scripts/download_packs.py)"
         return "Running (local LLM)" if t.engine == "llm" else "Running (offline)"
 
-    def _process(self, recognizer, shot, s, pool):
+    def _process(self, recognizer, shot, s):
         glossary = [t.strip() for t in s["glossary"].splitlines() if t.strip()]
         everything = recognizer.recognize(shot.bgra, shot.width, shot.height)
         kept = [l for l in everything
@@ -234,7 +236,7 @@ class Worker(QObject):
         todo = [t for t in fresh if not t["done"]][:MAX_BLOCKS]
         for i in range(0, len(todo), BATCH):
             batch = todo[i:i + BATCH]
-            for t, out in zip(batch, pool.map(lambda t: self.translator.translate(t["text"], *args), batch)):
+            for t, out in zip(batch, self.translator.translate_many([t["text"] for t in batch], *args)):
                 t["translation"], t["done"] = out, True
             update_shown()
             if i + BATCH < len(todo):
