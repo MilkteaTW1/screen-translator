@@ -41,8 +41,10 @@
   "version_label": "版本 {version}",
   "language_button": "語言:{name}",
 
-  "start": "開始",
-  "stop": "停止",
+  "screen_start": "開始翻譯畫面",
+  "screen_stop": "停止翻譯畫面",
+  "speech_start": "開始翻譯語音",
+  "speech_stop": "停止翻譯語音",
   "state_stopped": "已停止",
   "state_starting": "啟動中…",
   "status_running_llm": "執行中(本機 LLM)",
@@ -96,7 +98,7 @@
   "speech_packs_needed": "語音需要語言包:{names}",
 
   "tray_settings": "設定",
-  "tray_toggle": "開始 / 停止",
+  "tray_toggle": "開始 / 停止翻譯畫面",
   "tray_speech": "翻譯語音",
   "tray_shots": "讓截圖包含翻譯",
   "tray_update": "檢查更新",

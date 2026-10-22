@@ -44,11 +44,11 @@ def test_pick_prefers_the_exact_language_then_the_same_base_language():
 
 
 def test_missing_keys_fall_back_to_english(tmp_path, monkeypatch):
-    (tmp_path / "xx.json").write_text(json.dumps({"_name": "Test", "start": "GO"}), encoding="utf-8")
+    (tmp_path / "xx.json").write_text(json.dumps({"_name": "Test", "tab_speech": "GO"}), encoding="utf-8")
     monkeypatch.setattr(i18n, "USER_DIR", tmp_path)
     assert i18n.load("xx") == "xx"
-    assert i18n.t("start") == "GO"
-    assert i18n.t("stop") == "Stop"  # not translated in xx.json
+    assert i18n.t("tab_speech") == "GO"
+    assert i18n.t("tab_general") == "General"  # not translated in xx.json
     assert ("xx", "Test") in i18n.available()
     i18n.load("en")
 

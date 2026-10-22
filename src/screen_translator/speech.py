@@ -23,7 +23,9 @@ HF_CACHE = Path.home() / ".cache" / "huggingface" / "hub"
 # Multilingual Whisper models (Systran/faster-whisper-<name>) and their download size in MB.
 MODELS = {"tiny": 75, "base": 145, "small": 485}
 SILENCE_END = 0.7  # seconds of quiet that end an utterance
-MAX_SEGMENT = 10.0  # seconds: cut long speech here so captions keep up
+SOFT_SEGMENT = 5.0  # seconds: after this, even a short pause ends the utterance (long speech is cut between words)
+SOFT_PAUSE = 0.25
+MAX_SEGMENT = 12.0  # seconds: cut here whatever happens so captions keep up
 MIN_SPEECH = 0.4  # seconds: shorter sounds are clicks, not speech
 MAX_BACKLOG = 3  # utterances waiting for transcription; older ones are dropped to stay real-time
 
@@ -89,11 +91,22 @@ def clean_text(text):
     return t
 
 
+def normalize(audio, target=0.08, max_gain=30.0):
+    """Quiet speech is brought up to a normal level before Whisper hears it (it does far worse on faint audio)."""
+    if not len(audio):
+        return audio
+    rms = float(np.sqrt(np.mean(audio * audio)))
+    gain = min(max_gain, max(1.0, target / rms)) if rms > 1e-5 else 1.0
+    return np.clip(audio * gain, -1.0, 1.0) if gain > 1.0 else audio
+
+
 class Segmenter:
-    """Cuts a stream of 0.1 s chunks into utterances using a simple adaptive loudness gate."""
+    """Cuts a stream of 0.1 s chunks into utterances using an adaptive loudness gate: speech starts when the
+    sound rises clearly above the background, and carries on while it stays above a lower level, so quiet
+    voices are heard and the soft end of a word is not taken for silence."""
 
     def __init__(self):
-        self.floor = 0.005  # running estimate of the background level
+        self.floor = 0.002  # running estimate of the background level
         self.pre = []  # a little audio before speech starts
         self.buf = []
         self.speech = 0.0
@@ -102,7 +115,7 @@ class Segmenter:
     def feed(self, chunk):
         """Returns a finished utterance (float32 array) or None."""
         rms = float(np.sqrt(np.mean(chunk * chunk))) if len(chunk) else 0.0
-        loud = rms > max(0.01, 3 * self.floor)
+        loud = rms > (max(0.0008, 1.6 * self.floor) if self.buf else max(0.0015, 3 * self.floor))
         if not self.buf and not loud:
             self.floor = 0.95 * self.floor + 0.05 * rms
             self.pre = (self.pre + [chunk])[-3:]
@@ -117,12 +130,22 @@ class Segmenter:
         else:
             self.quiet += len(chunk) / SAMPLE_RATE
         length = sum(len(c) for c in self.buf) / SAMPLE_RATE
-        if self.quiet >= SILENCE_END or length >= MAX_SEGMENT:
+        pause = SOFT_PAUSE if length >= SOFT_SEGMENT else SILENCE_END
+        if self.quiet >= pause or length >= MAX_SEGMENT:
             audio = np.concatenate(self.buf)
             enough = self.speech >= MIN_SPEECH
             self.buf, self.pre = [], []
             return audio if enough else None
         return None
+
+
+def transcribe(model, audio, language=None):
+    """(text, info) for one utterance."""
+    segments, info = model.transcribe(
+        normalize(audio), language=language, beam_size=1, vad_filter=False, condition_on_previous_text=False,
+        no_speech_threshold=0.6, without_timestamps=True)
+    parts = [seg for seg in segments if seg.no_speech_prob < 0.6 and seg.avg_logprob > -1.5]
+    return clean_text(" ".join(seg.text for seg in parts)), info
 
 
 class SpeechWorker(QObject):
@@ -210,11 +233,7 @@ class SpeechWorker(QObject):
     def _handle(self, model, audio):
         s = self.settings
         language = None if s["speech_lang"] == "auto" else s["speech_lang"]
-        segments, info = model.transcribe(
-            audio, language=language, beam_size=1, vad_filter=False, condition_on_previous_text=False,
-            no_speech_threshold=0.6, without_timestamps=True)
-        parts = [seg for seg in segments if seg.no_speech_prob < 0.6 and seg.avg_logprob > -1.2]
-        text = clean_text(" ".join(seg.text for seg in parts))
+        text, info = transcribe(model, audio, language)
         if not text:
             return
         code = info.language

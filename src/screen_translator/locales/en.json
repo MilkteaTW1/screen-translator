@@ -41,8 +41,10 @@
   "version_label": "Version {version}",
   "language_button": "Language: {name}",
 
-  "start": "Start",
-  "stop": "Stop",
+  "screen_start": "Start screen translation",
+  "screen_stop": "Stop screen translation",
+  "speech_start": "Start speech translation",
+  "speech_stop": "Stop speech translation",
   "state_stopped": "Stopped",
   "state_starting": "Starting...",
   "status_running_llm": "Running (local LLM)",
@@ -96,7 +98,7 @@
   "speech_packs_needed": "Language packs needed for speech: {names}",
 
   "tray_settings": "Settings",
-  "tray_toggle": "Start / Stop",
+  "tray_toggle": "Start / Stop screen translation",
   "tray_speech": "Translate speech",
   "tray_shots": "Let screenshots include translations",
   "tray_update": "Check for updates",

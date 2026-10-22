@@ -22,13 +22,13 @@ from PySide6.QtWidgets import (
     QLineEdit, QMenu, QMessageBox, QPlainTextEdit, QPushButton, QSystemTrayIcon, QTabWidget, QVBoxLayout, QWidget,
 )
 
-from . import ocr
+from . import ocr, tracking
 from .overlay import CaptionOverlay, CoverChip, Overlay
 from .speech import MODELS, SpeechWorker, download_model, ensure_streams, find_model, import_model
 from . import __version__, i18n, llm_setup, packs, updater
 from .i18n import t
 from .translator import (
-    LANGUAGES, Translator, install_pack, looks_like_source, missing_pairs, needed_pairs, ocr_tag_to_code,
+    LANGUAGES, Translator, argos_code, install_pack, looks_like_source, missing_pairs, needed_pairs, ocr_tag_to_code,
 )
 
 SETTINGS_PATH = Path(os.environ.get("APPDATA", Path.home())) / "ScreenTranslator" / "settings.json"
@@ -95,6 +95,11 @@ def load_settings():
         return dict(DEFAULTS)
 
 
+def _visible(track):
+    """The translation to draw for a followed block: only once it has been seen twice and translated."""
+    return track["translation"] if track["seen"] >= 2 and track["done"] else None
+
+
 class Worker(QObject):
     results = Signal(list)
     status = Signal(str)
@@ -111,6 +116,7 @@ class Worker(QObject):
         self.thread = None
         self.shown = set()  # translations currently on screen, whitespace-stripped
         self.tracks = []  # text blocks followed from scan to scan: position, text, translation, times seen
+        self._others = []  # (x, y, w, h, line height) of lines we do not translate: the overlay keeps clear of them
         self.static = False  # the screen barely changed since the previous scan
         self.origin = (0, 0)  # top-left of the scanned area, added back so the overlay draws in screen coordinates
 
@@ -137,14 +143,14 @@ class Worker(QObject):
         self.results.emit([])
 
     def _loop(self):
-        recognizer, prev, last_scan = None, None, 0.0
+        recognizer, prev, prev_gray, last_scan = None, None, None, 0.0
         with mss.mss() as sct:
             mon = sct.monitors[1]
             while self.running:
                 s = self.settings
                 try:
                     if recognizer is None or recognizer.tag != s["source"]:
-                        recognizer = ocr.Recognizer(s["source"])
+                        recognizer = ocr.make_recognizer(s["source"])
                     region = s.get("region")  # [left, top, width, height]: translate only this part of the screen
                     self.origin = (region[0], region[1]) if region else (0, 0)
                     shot = sct.grab(dict(left=region[0], top=region[1], width=region[2], height=region[3])
@@ -154,6 +160,12 @@ class Worker(QObject):
                     diff = None if prev is None or small.shape != prev.shape else float(np.abs(small - prev).mean())
                     self.static = diff is not None and diff < 2.0  # barely changed: not scrolling or playing video
                     changed = diff is None or diff > 0.6
+                    green = arr[:, :, 1]  # one channel is enough to follow shifting text
+                    if changed and self.tracks and prev_gray is not None and not self.static:
+                        if self._follow_scroll(prev_gray, green) != (0, 0):  # (0, 0): too little to measure yet
+                            prev_gray = green
+                    else:
+                        prev_gray = green
                     if scan_due(changed, self.dirty, time.monotonic() - last_scan, s["interval"]):
                         prev, self.dirty = small, False
                         gray = (arr[::4, ::4, :3].astype(np.int32) * (114, 587, 299)).sum(axis=2) // 1000  # B, G, R
@@ -168,6 +180,27 @@ class Worker(QObject):
                     time.sleep(1.0)  # do not retry a failing step 12 times a second
                 time.sleep(POLL)
 
+    def _follow_scroll(self, before, now):
+        """The picture scrolled: move the translations with it right away (no OCR, no new translation), and drop
+        the ones that left the screen. Returns what tracking.follow returned."""
+        shift = tracking.follow(self.tracks, before, now)
+        if not shift or shift == (0, 0):
+            return shift
+        dx, dy = shift
+        height, width = now.shape
+        self._others = [(x + dx, y + dy, w, h, lh) for x, y, w, h, lh in self._others]
+        self.tracks = [t for t in self.tracks if t["x"] + t["w"] > 0 and t["x"] < width
+                       and t["y"] + t["h"] > 0 and t["y"] < height]
+        self.results.emit(self._snapshot())
+        return shift
+
+    def _snapshot(self):
+        """What the overlay draws. Lines we don't translate are included (text None) so it avoids covering them."""
+        ox, oy = self.origin
+        items = [(x + ox, y + oy, w, h, None, lh) for x, y, w, h, lh in self._others]
+        items += [(t["x"] + ox, t["y"] + oy, t["w"], t["h"], _visible(t), t["lh"]) for t in self.tracks]
+        return items
+
     def _status_text(self):
         t = self.translator
         if t.missing_packs:
@@ -178,14 +211,19 @@ class Worker(QObject):
     def _process(self, recognizer, shot, s):
         glossary = [t.strip() for t in s["glossary"].splitlines() if t.strip()]
         everything = recognizer.recognize(shot.bgra, shot.width, shot.height)
-        kept = [l for l in everything
-                if looks_like_source(l.text, s["source"], l.w, l.h, s["skip_names"])
-                and not self._is_own_output(l.text)]
-        blocks = ocr.merge_paragraphs(kept, recognizer.joiner)  # translate whole paragraphs, not fragments
+        supported = set(self.langs.values())
+        target = s["target"]
+
+        def wanted(l):  # in the source language (each line says which OCR language read it), and not already the target
+            code = ocr_tag_to_code(l.tag or s["source"], supported)
+            return (looks_like_source(l.text, l.tag or s["source"], l.w, l.h, s["skip_names"])
+                    and argos_code(code) != argos_code(target) and not self._is_own_output(l.text))
+
+        kept = [l for l in everything if wanted(l)]
+        blocks = ocr.merge_paragraphs(kept)  # translate whole paragraphs, not fragments
         blocks.sort(key=lambda b: (b.y, b.x))
-        src = ocr_tag_to_code(s["source"], set(self.langs.values()))
-        args = (src, s["target"], s["source"], glossary, s["auto_proper"], s["keep_katakana"])
         kept_ids = {id(l) for l in kept}
+        self._others = [(l.x, l.y, l.w, l.h, l.h) for l in everything if id(l) not in kept_ids]
 
         # OCR reads the same text a little differently on every scan (a misread letter, a different
         # line break, a pass where it is missed altogether). Follow each text block from scan to scan
@@ -203,7 +241,7 @@ class Worker(QObject):
                 if not self._same_place(t, b):  # it really moved (scrolling): follow it
                     t.update(x=b.x, y=b.y, w=b.w, h=b.h, lh=b.lh)
             else:
-                t = {"x": b.x, "y": b.y, "w": b.w, "h": b.h, "lh": b.lh, "text": b.text,
+                t = {"x": b.x, "y": b.y, "w": b.w, "h": b.h, "lh": b.lh, "text": b.text, "tag": b.tag or s["source"],
                      "translation": None, "done": False, "seen": 1, "missed": 0}
             fresh.append(t)
         carried = []
@@ -215,22 +253,12 @@ class Worker(QObject):
         self.tracks = fresh + carried
 
         for t in fresh:  # already translated earlier: straight from the cache
-            key = (t["text"], src, s["target"])
+            key = (t["text"], ocr_tag_to_code(t["tag"], supported), target)
             if not t["done"] and key in self.translator.cache:
                 t["translation"], t["done"] = self.translator.cache[key], True
 
-        def visible(t):
-            return t["translation"] if t["seen"] >= 2 and t["done"] else None
-
-        def snapshot():
-            # Lines we don't translate are included (text None) so the overlay avoids covering them.
-            ox, oy = self.origin
-            items = [(l.x + ox, l.y + oy, l.w, l.h, None, l.h) for l in everything if id(l) not in kept_ids]
-            items += [(t["x"] + ox, t["y"] + oy, t["w"], t["h"], visible(t), t["lh"]) for t in self.tracks]
-            return items
-
         def update_shown():
-            self.shown = {"".join(v.split()) for v in map(visible, self.tracks) if v}
+            self.shown = {"".join(v.split()) for v in map(_visible, self.tracks) if v}
 
         # Translate top to bottom in small batches and show each batch as it finishes, so a
         # screen full of text fills in progressively instead of freezing until everything is done.
@@ -238,14 +266,17 @@ class Worker(QObject):
         todo = [t for t in fresh if not t["done"]][:MAX_BLOCKS]
         for i in range(0, len(todo), BATCH):
             batch = todo[i:i + BATCH]
-            for t, out in zip(batch, self.translator.translate_many([t["text"] for t in batch], *args)):
-                t["translation"], t["done"] = out, True
+            for tag in dict.fromkeys(t["tag"] for t in batch):  # one engine call per source language
+                same = [t for t in batch if t["tag"] == tag]
+                args = (ocr_tag_to_code(tag, supported), target, tag, glossary, s["auto_proper"], s["keep_katakana"])
+                for t, out in zip(same, self.translator.translate_many([t["text"] for t in same], *args)):
+                    t["translation"], t["done"] = out, True
             update_shown()
             if i + BATCH < len(todo):
-                self.results.emit(snapshot())
+                self.results.emit(self._snapshot())
                 if not self.running or self.dirty:  # the user changed something: restart with fresh settings
                     break
-        return snapshot()
+        return self._snapshot()
 
     def _match_track(self, block, used):
         """The earlier text block this one most likely is: overlapping area and nearly the same text."""
@@ -292,6 +323,8 @@ class Panel(QWidget):
 
         self.source = QComboBox()
         installed = ocr.available_languages()
+        if installed:
+            self.source.addItem("", "auto")
         for tag, name in installed:
             self.source.addItem(f"{name} ({tag})", tag)
         self._select(self.source, s["source"])
@@ -336,8 +369,10 @@ class Panel(QWidget):
         self._select(self.speech_lang, s["speech_lang"])
         self.speech_state = QLabel("")
         self.glossary = QPlainTextEdit(s["glossary"])
-        self.toggle = QPushButton()
+        self.toggle = QPushButton()  # screen translation on/off
         self.toggle.clicked.connect(self.on_toggle)
+        self.speech_toggle = QPushButton()  # speech translation on/off: independent of the screen one
+        self.speech_toggle.clicked.connect(lambda: self.speech_enabled.setChecked(not self.speech_enabled.isChecked()))
         self.state = QLabel()
         self.update_button = QPushButton()
         self._text(self.update_button.setText, "check_updates")
@@ -371,7 +406,6 @@ class Panel(QWidget):
         self._row(speech_form, "speech_language", self.speech_lang)
         self._row(speech_form, "speech_model", self.speech_model)
         lay.addLayout(speech_form)
-        lay.addWidget(self.speech_state)
         lay.addStretch(1)
         self._tab(speech_tab, "tab_speech")
 
@@ -423,8 +457,12 @@ class Panel(QWidget):
         main = QVBoxLayout(self)
         main.addLayout(top)
         main.addWidget(self.tabs)
-        main.addWidget(self.toggle)
+        buttons = QHBoxLayout()
+        buttons.addWidget(self.toggle)
+        buttons.addWidget(self.speech_toggle)
+        main.addLayout(buttons)
         main.addWidget(self.state)
+        main.addWidget(self.speech_state)
 
         for w in (self.source, self.target):
             w.currentIndexChanged.connect(self.apply)
@@ -450,6 +488,7 @@ class Panel(QWidget):
         worker.results.connect(overlay.set_items)
         self.speech_enabled.toggled.connect(self.apply)
         self.speech_enabled.toggled.connect(self.on_speech_toggle)
+        self.speech_enabled.toggled.connect(self._show_toggles)
         for w in (self.speech_source, self.speech_model):
             w.currentIndexChanged.connect(self.apply)
             w.currentIndexChanged.connect(self._restart_speech)
@@ -493,11 +532,17 @@ class Panel(QWidget):
         self.speech_source.setItemText(0, t("audio_system"))
         self.speech_source.setItemText(1, t("audio_mic"))
         self.speech_lang.setItemText(0, t("auto_detect"))
+        if self.source.itemData(0) == "auto":
+            self.source.setItemText(0, t("auto_detect"))
         for i, (name, mb) in enumerate(MODELS.items()):
             self.speech_model.setItemText(i, t("model_size", name=name, mb=mb))
         shown = dict(i18n.available()).get(i18n.current, i18n.current)
         self.language_button.setText(t("language_button", name=shown))
-        self.toggle.setText(t("stop" if self.worker.running else "start"))
+        self._show_toggles()
+
+    def _show_toggles(self, *_):
+        self.toggle.setText(t("screen_stop" if self.worker.running else "screen_start"))
+        self.speech_toggle.setText(t("speech_stop" if self.speech_enabled.isChecked() else "speech_start"))
 
     def _fill_language_menu(self):
         menu = self.language_button.menu()
@@ -553,8 +598,8 @@ class Panel(QWidget):
     def ensure_packs(self, *_, src=None):
         """Offer to download the offline language packs the chosen pair needs."""
         s = self.current()
-        src = src or ocr_tag_to_code(s["source"], set(self.langs.values()))
-        missing = missing_pairs(src, s["target"])
+        codes = [src] if src else self._source_codes(s)
+        missing = sorted({p for code in codes for p in missing_pairs(code, s["target"])})
         if not missing or self.downloading:
             return
         names = ", ".join(f"{a} → {b}" for a, b in missing)
@@ -576,6 +621,12 @@ class Panel(QWidget):
             return
         self.downloading = True
         threading.Thread(target=self._download, args=(missing,), daemon=True).start()
+
+    def _source_codes(self, s):
+        """Language codes the screen may be in: the chosen one, or every installed OCR language for auto-detect."""
+        supported = set(self.langs.values())
+        tags = [tag for tag, _name in ocr.available_languages()] if s["source"] == "auto" else [s["source"]]
+        return sorted({ocr_tag_to_code(tag, supported) for tag in tags} - {"auto"})
 
     def _download(self, pairs):
         try:
@@ -723,13 +774,13 @@ class Panel(QWidget):
     def on_toggle(self):
         if self.worker.running:
             self.worker.stop()
-            self.toggle.setText(t("start"))
+            self._show_toggles()
             self.state.setText(t("state_stopped"))
         else:
             self.apply()
             self.ensure_packs()
             self.worker.start()
-            self.toggle.setText(t("stop"))
+            self._show_toggles()
             self.state.setText(t("state_starting"))
 
     def showEvent(self, e):  # keep this window out of the screenshots too, so it never gets translated
@@ -748,9 +799,11 @@ def prewarm(worker):
     """Load the translation model in the background so the first translation is instant."""
     try:
         s = worker.settings
-        for pair in needed_pairs(ocr_tag_to_code(s["source"], set(LANGUAGES.values())), s["target"]):
-            if pair in packs.installed_pairs():
-                packs._load(pair)
+        tags = [t for t, _n in ocr.available_languages()] if s["source"] == "auto" else [s["source"]]
+        for tag in tags:
+            for pair in needed_pairs(ocr_tag_to_code(tag, set(LANGUAGES.values())), s["target"]):
+                if pair in packs.installed_pairs():
+                    packs._load(pair)
     except Exception:
         pass
 

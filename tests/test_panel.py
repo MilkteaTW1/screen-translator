@@ -51,15 +51,43 @@ def test_language_button_switches_every_label_and_is_remembered(monkeypatch, tmp
     monkeypatch.setattr(appmod, "SETTINGS_PATH", tmp_path / "settings.json")
     monkeypatch.setattr(appmod, "set_autostart", lambda on: None)
     panel = appmod.Panel(appmod.Worker(appmod.LANGUAGES), _Overlay(), appmod.LANGUAGES)
-    assert panel.toggle.text() == "Start" and panel.tabs.tabText(0) == "Translate"
+    assert panel.toggle.text() == "Start screen translation" and panel.tabs.tabText(0) == "Translate"
     panel._fill_language_menu()
     names = [a.text() for a in panel.language_button.menu().actions()]
     assert names[:2] == ["English", "繁體中文"]
     panel.set_language("zh-TW")
-    assert panel.toggle.text() == "開始" and panel.tabs.tabText(0) == "翻譯"
+    assert panel.toggle.text() == "開始翻譯畫面" and panel.tabs.tabText(0) == "翻譯"
     assert "繁體中文" in panel.language_button.text()
     assert panel.skip_names.text().startswith("略過")
     assert panel.speech_source.itemText(1) == "麥克風"
     assert appmod.json.loads((tmp_path / "settings.json").read_text(encoding="utf-8"))["ui_language"] == "zh-TW"
     panel.set_language("en")
-    assert panel.toggle.text() == "Start"
+    assert panel.toggle.text() == "Start screen translation"
+
+
+def test_screen_language_offers_auto_detect_and_asks_for_every_installed_language(monkeypatch, tmp_path):
+    qapp = QApplication.instance() or QApplication([])
+    monkeypatch.setattr(appmod, "SETTINGS_PATH", tmp_path / "settings.json")
+    monkeypatch.setattr(appmod, "set_autostart", lambda on: None)
+    monkeypatch.setattr(appmod.ocr, "available_languages", lambda: [("en-US", "English"), ("ja", "Japanese")])
+    panel = appmod.Panel(appmod.Worker(appmod.LANGUAGES), _Overlay(), appmod.LANGUAGES)
+    assert panel.source.itemData(0) == "auto" and panel.source.itemText(0) == "Auto-detect"
+    panel._select(panel.source, "auto")
+    assert panel.current()["source"] == "auto"
+    assert panel._source_codes(panel.current()) == ["en", "ja"]
+    panel.set_language("zh-TW")
+    assert panel.source.itemText(0) == "自動偵測"
+
+
+def test_screen_and_speech_translation_switch_on_and_off_independently(monkeypatch, tmp_path):
+    qapp = QApplication.instance() or QApplication([])
+    monkeypatch.setattr(appmod, "SETTINGS_PATH", tmp_path / "settings.json")
+    monkeypatch.setattr(appmod, "set_autostart", lambda on: None)
+    panel = appmod.Panel(appmod.Worker(appmod.LANGUAGES), _Overlay(), appmod.LANGUAGES)
+    assert panel.toggle.text() == "Start screen translation" and panel.speech_toggle.text() == "Start speech translation"
+    panel.speech_toggle.click()  # speech on: the screen side is untouched
+    assert panel.speech_enabled.isChecked() and not panel.worker.running
+    assert panel.speech_toggle.text() == "Stop speech translation" and panel.toggle.text() == "Start screen translation"
+    panel.speech_toggle.click()
+    assert not panel.speech_enabled.isChecked() and panel.speech_toggle.text() == "Start speech translation"
+    assert appmod.json.loads((tmp_path / "settings.json").read_text(encoding="utf-8"))["speech_enabled"] is False
