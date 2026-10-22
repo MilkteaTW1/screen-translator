@@ -46,6 +46,9 @@ class MainActivity : ComponentActivity() {
         }
     }
     private val notificationLauncher = registerForActivityResult(ActivityResultContracts.RequestPermission()) { askProjection() }
+    private val micLauncher = registerForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
+        if (ok) askNotification() else status.text = "Microphone permission is needed for speech"
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -87,6 +90,19 @@ class MainActivity : ComponentActivity() {
         }
         column.addView(glossary)
 
+        column.addView(label("What to translate"))
+        val screenBox = CheckBox(this).apply { text = "Text on the screen"; isChecked = prefs.screenText }
+        column.addView(screenBox)
+        val speechBox = CheckBox(this).apply { text = "Speech (list what is heard at the bottom)"; isChecked = prefs.speech }
+        column.addView(speechBox)
+        val micBox = CheckBox(this).apply { text = "Listen to the microphone instead of phone audio"; isChecked = prefs.speechMic }
+        column.addView(micBox)
+        column.addView(label("Spoken language"))
+        val speechLang = Spinner(this)
+        speechLang.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, VoskModels.languages.map { it.label })
+        speechLang.setSelection(prefs.speechLang)
+        column.addView(speechLang)
+
         toggle = Button(this)
         status = TextView(this).apply { setPadding(0, pad / 2, 0, 0) }
         column.addView(toggle)
@@ -99,6 +115,10 @@ class MainActivity : ComponentActivity() {
             prefs.intervalMs = ((interval.text.toString().toDoubleOrNull() ?: 1.0) * 1000).toInt().coerceAtLeast(100)
             prefs.skipNames = skip.isChecked
             prefs.glossary = glossary.text.toString()
+            prefs.screenText = screenBox.isChecked
+            prefs.speech = speechBox.isChecked
+            prefs.speechMic = micBox.isChecked
+            prefs.speechLang = speechLang.selectedItemPosition
         }
         val onPick = object : AdapterView.OnItemSelectedListener {
             var first = 2  // ignore the two initial callbacks
@@ -117,10 +137,12 @@ class MainActivity : ComponentActivity() {
             if (CaptureService.running) {
                 startService(Intent(this, CaptureService::class.java).setAction(CaptureService.ACTION_STOP))
                 status.postDelayed({ refresh() }, 400)
-            } else if (prefs.sourceLang.code == prefs.targetLang.code) {
+            } else if (!prefs.screenText && !prefs.speech) {
+                status.text = "Choose screen text, speech, or both"
+            } else if (prefs.screenText && prefs.sourceLang.code == prefs.targetLang.code) {
                 status.text = "Pick two different languages"
             } else {
-                ensureLanguageData { startFlow() }
+                ensureLanguageData { ensureSpeechModel { startFlow() } }
             }
         }
     }
@@ -141,6 +163,14 @@ class MainActivity : ComponentActivity() {
             startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")))
             return
         }
+        if (prefs.speech && checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            micLauncher.launch(Manifest.permission.RECORD_AUDIO)
+            return
+        }
+        askNotification()
+    }
+
+    private fun askNotification() {
         if (Build.VERSION.SDK_INT >= 33 &&
             checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
             notificationLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
@@ -150,13 +180,46 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun askProjection() {
+        // Only listening to the microphone needs no screen capture at all.
+        if (!prefs.screenText && prefs.speechMic) {
+            startForegroundService(Intent(this, CaptureService::class.java))
+            status.postDelayed({ refresh() }, 600)
+            return
+        }
         val mpm = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
         projectionLauncher.launch(mpm.createScreenCaptureIntent())
     }
 
+    /** Speech recognition needs an offline model (about 40 MB); the user decides whether and how to download it. */
+    private fun ensureSpeechModel(onReady: () -> Unit) {
+        if (!prefs.speech) { onReady(); return }
+        val model = VoskModels.forLang(prefs.speechLanguage)
+        if (VoskModels.isInstalled(this, model)) { onReady(); return }
+        AlertDialog.Builder(this)
+            .setTitle("Download speech model?")
+            .setMessage("Listening in ${prefs.speechLanguage.label} needs an offline speech model (about ${model.megabytes} MB, downloaded once). How do you want to download?")
+            .setPositiveButton("Wi-Fi only") { _, _ -> downloadModel(model, true, onReady) }
+            .setNeutralButton("Any network") { _, _ -> downloadModel(model, false, onReady) }
+            .setNegativeButton("Not now") { _, _ -> status.text = "Speech model needed for ${prefs.speechLanguage.label}" }
+            .show()
+    }
+
+    private fun downloadModel(model: VoskModel, wifiOnly: Boolean, onReady: () -> Unit) {
+        status.text = "Downloading speech model ..."
+        VoskModels.download(this, model, wifiOnly,
+            progress = { pct -> runOnUiThread { status.text = "Downloading speech model $pct%" } },
+            done = { err -> runOnUiThread {
+                if (err == null) { status.text = "Speech model ready"; onReady() }
+                else status.text = "Download failed: ${err.message}"
+            } })
+    }
+
     /** Translation needs a language-data file per non-English language (about 30 MB). The user decides how to get it. */
     private fun ensureLanguageData(onReady: () -> Unit) {
-        val needed = listOf(prefs.sourceLang.code, prefs.targetLang.code).filter { it != "en" }.distinct()
+        val langs = mutableListOf(prefs.targetLang.code)
+        if (prefs.screenText) langs += prefs.sourceLang.code
+        if (prefs.speech) langs += prefs.speechLanguage.code
+        val needed = langs.filter { it != "en" }.distinct()
         val manager = RemoteModelManager.getInstance()
         manager.getDownloadedModels(TranslateRemoteModel::class.java).addOnSuccessListener { have ->
             val haveCodes = have.map { it.language }.toSet()

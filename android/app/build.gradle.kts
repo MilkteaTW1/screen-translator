@@ -11,8 +11,8 @@ android {
         applicationId = "io.github.milkteatw1.screentranslator"
         minSdk = 26
         targetSdk = 34
-        versionCode = 1
-        versionName = "0.3.0"
+        versionCode = 2
+        versionName = "0.4.0"
     }
 
     buildTypes {
@@ -48,5 +48,7 @@ dependencies {
     implementation("com.google.android.gms:play-services-mlkit-text-recognition-japanese:16.0.1")
     implementation("com.google.android.gms:play-services-mlkit-text-recognition-korean:16.0.1")
     implementation("com.google.mlkit:translate:17.0.3")
+    // Offline speech recognition (models are downloaded on demand, after the user agrees).
+    implementation("com.alphacephei:vosk-android:0.3.47")
     testImplementation("junit:junit:4.13.2")
 }

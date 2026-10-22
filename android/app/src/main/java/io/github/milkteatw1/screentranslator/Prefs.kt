@@ -22,6 +22,20 @@ class Prefs(context: Context) {
         get() = sp.getBoolean("skipNames", true)
         set(v) = sp.edit().putBoolean("skipNames", v).apply()
 
+    var screenText: Boolean
+        get() = sp.getBoolean("screenText", true)
+        set(v) = sp.edit().putBoolean("screenText", v).apply()
+    var speech: Boolean
+        get() = sp.getBoolean("speech", false)
+        set(v) = sp.edit().putBoolean("speech", v).apply()
+    var speechMic: Boolean
+        get() = sp.getBoolean("speechMic", false)
+        set(v) = sp.edit().putBoolean("speechMic", v).apply()
+    var speechLang: Int
+        get() = sp.getInt("speechLang", 0).coerceIn(0, VoskModels.languages.lastIndex)
+        set(v) = sp.edit().putInt("speechLang", v).apply()
+
+    val speechLanguage get() = VoskModels.languages[speechLang]
     val sourceLang get() = Langs.sources[source]
     val targetLang get() = Langs.targets[target]
 }

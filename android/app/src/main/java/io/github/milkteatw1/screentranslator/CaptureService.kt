@@ -35,25 +35,29 @@ import com.google.mlkit.vision.text.chinese.ChineseTextRecognizerOptions
 import com.google.mlkit.vision.text.japanese.JapaneseTextRecognizerOptions
 import com.google.mlkit.vision.text.korean.KoreanTextRecognizerOptions
 import com.google.mlkit.vision.text.latin.TextRecognizerOptions
+import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 
-/** Captures the screen, reads the text on it, translates it and keeps the overlay up to date. */
+/** Reads the text on the screen and/or the speech being played, translates it and keeps the overlay up to date. */
 class CaptureService : Service() {
     companion object {
         @Volatile var running = false
         const val ACTION_STOP = "stop"
         const val EXTRA_CODE = "code"
         const val EXTRA_DATA = "data"
+        const val EXTRA_TEST_WAV = "testWav"  // feed a WAV file to the speech engine instead of live audio (testing)
         private const val CHANNEL = "capture"
         private const val TAG = "ScreenTranslator"
-        private const val MAX_NEW_PER_SCAN = 30
-        private const val BATCH = 5
+        private const val MAX_NEW_PER_SCAN = 80
+        private const val TRANSLATE_THREADS = 3
+        private const val MAX_CAPTIONS = 4
     }
 
     /** A text block followed from scan to scan, so what is on screen stays steady. */
     private class Track(var rect: RectF, var lineHeight: Float, val text: String) {
-        var translation: String? = null
-        var done = false
+        @Volatile var translation: String? = null
+        @Volatile var done = false
+        @Volatile var queued = false
         var seen = 1
         var missed = 0
     }
@@ -72,14 +76,17 @@ class CaptureService : Service() {
     private var display: VirtualDisplay? = null
     private var recognizer: TextRecognizer? = null
     private var translator: Translator? = null
+    private var pool = Executors.newFixedThreadPool(TRANSLATE_THREADS)
+    private var speech: SpeechEngine? = null
+    private val captions = ArrayList<Pair<String, String>>()
     private var width = 0
     private var height = 0
-    private var tracks = listOf<Track>()
+    @Volatile private var tracks = listOf<Track>()
     private var previous: IntArray? = null
     private var staticScreen = false
     private var glossary = listOf<String>()
-    private val cache = HashMap<String, String>()
-    private var shown = listOf<String>()
+    private val cache = java.util.concurrent.ConcurrentHashMap<String, String>()
+    @Volatile private var shown = listOf<String>()
     private var hansHant: android.icu.text.Transliterator? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -90,25 +97,26 @@ class CaptureService : Service() {
             return START_NOT_STICKY
         }
         if (running) return START_NOT_STICKY
-        startInForeground()
         prefs = Prefs(this)
         src = prefs.sourceLang
         tgt = prefs.targetLang
         glossary = prefs.glossary.lines().map { it.trim() }.filter { it.isNotEmpty() }
+        val hasProjection = intent.hasExtra(EXTRA_DATA)
+        startInForeground(hasProjection, prefs.speech && prefs.speechMic)
         handler = Handler(thread.looper)
         try {
-            setUp(intent)
+            setUp(intent, hasProjection)
         } catch (e: Exception) {
             Log.e(TAG, "set-up failed", e)
             stopSelf()
             return START_NOT_STICKY
         }
         running = true
-        handler.post(::tick)
+        if (prefs.screenText) handler.post(::tick)
         return START_NOT_STICKY
     }
 
-    private fun startInForeground() {
+    private fun startInForeground(projection: Boolean, microphone: Boolean) {
         val nm = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
         nm.createNotificationChannel(NotificationChannel(CHANNEL, "Screen translation", NotificationManager.IMPORTANCE_LOW))
         val stop = PendingIntent.getService(
@@ -122,41 +130,33 @@ class CaptureService : Service() {
             .setOngoing(true)
             .build()
         if (Build.VERSION.SDK_INT >= 29) {
-            startForeground(1, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION)
+            var type = 0
+            if (projection) type = type or ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
+            if (microphone) type = type or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+            startForeground(1, notification, type)
         } else {
             startForeground(1, notification)
         }
     }
 
-    private fun setUp(intent: Intent) {
+    private fun setUp(intent: Intent, hasProjection: Boolean) {
         val dm = DisplayMetrics()
         val wm = getSystemService(WINDOW_SERVICE) as WindowManager
         @Suppress("DEPRECATION") wm.defaultDisplay.getRealMetrics(dm)
         width = dm.widthPixels
         height = dm.heightPixels
 
-        val mpm = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
-        @Suppress("DEPRECATION") val data = intent.getParcelableExtra<Intent>(EXTRA_DATA)!!
-        val mp = mpm.getMediaProjection(intent.getIntExtra(EXTRA_CODE, 0), data)
-        mp.registerCallback(object : MediaProjection.Callback() {
-            override fun onStop() {
-                stopSelf()
-            }
-        }, handler)
-        projection = mp
-        val ir = ImageReader.newInstance(width, height, PixelFormat.RGBA_8888, 2)
-        reader = ir
-        display = mp.createVirtualDisplay("screen-translator", width, height, dm.densityDpi,
-            DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR, ir.surface, null, handler)
-
-        recognizer = when (src.script) {
-            Script.LATIN -> TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
-            Script.CHINESE -> TextRecognition.getClient(ChineseTextRecognizerOptions.Builder().build())
-            Script.JAPANESE -> TextRecognition.getClient(JapaneseTextRecognizerOptions.Builder().build())
-            Script.KOREAN -> TextRecognition.getClient(KoreanTextRecognizerOptions.Builder().build())
+        if (hasProjection) {
+            val mpm = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+            @Suppress("DEPRECATION") val data = intent.getParcelableExtra<Intent>(EXTRA_DATA)!!
+            val mp = mpm.getMediaProjection(intent.getIntExtra(EXTRA_CODE, 0), data)
+            mp.registerCallback(object : MediaProjection.Callback() {
+                override fun onStop() {
+                    stopSelf()
+                }
+            }, handler)
+            projection = mp
         }
-        translator = Translation.getClient(
-            TranslatorOptions.Builder().setSourceLanguage(src.code).setTargetLanguage(tgt.code).build())
         if (tgt.traditional) {
             hansHant = try { android.icu.text.Transliterator.getInstance("Hans-Hant") } catch (e: Exception) { null }
         }
@@ -173,6 +173,43 @@ class CaptureService : Service() {
             lp.layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
         }
         main.post { wm.addView(view, lp) }
+
+        if (prefs.screenText) setUpScreen(dm)
+        if (prefs.speech) setUpSpeech(intent)
+    }
+
+    private fun setUpScreen(dm: DisplayMetrics) {
+        val mp = projection ?: throw IllegalStateException("screen capture was not granted")
+        val ir = ImageReader.newInstance(width, height, PixelFormat.RGBA_8888, 2)
+        reader = ir
+        display = mp.createVirtualDisplay("screen-translator", width, height, dm.densityDpi,
+            DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR, ir.surface, null, handler)
+        recognizer = when (src.script) {
+            Script.LATIN -> TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
+            Script.CHINESE -> TextRecognition.getClient(ChineseTextRecognizerOptions.Builder().build())
+            Script.JAPANESE -> TextRecognition.getClient(JapaneseTextRecognizerOptions.Builder().build())
+            Script.KOREAN -> TextRecognition.getClient(KoreanTextRecognizerOptions.Builder().build())
+        }
+        translator = Translation.getClient(
+            TranslatorOptions.Builder().setSourceLanguage(src.code).setTargetLanguage(tgt.code).build())
+    }
+
+    private fun setUpSpeech(intent: Intent) {
+        val engine = SpeechEngine(
+            this, prefs.speechLanguage, tgt, glossary,
+            onPartial = { overlay?.partial = it },
+            onLine = { said, translated ->
+                synchronized(captions) {
+                    captions.add(said to translated)
+                    while (captions.size > MAX_CAPTIONS) captions.removeAt(0)
+                    overlay?.captions = captions.toList()
+                }
+            },
+            onStatus = { Log.i(TAG, it) },
+        )
+        speech = engine
+        val kind = if (prefs.speechMic) AudioKind.MICROPHONE else AudioKind.SYSTEM
+        engine.start(kind, projection, intent.getStringExtra(EXTRA_TEST_WAV))
     }
 
     private fun tick() {
@@ -180,7 +217,7 @@ class CaptureService : Service() {
         var delay = prefs.intervalMs.toLong().coerceAtLeast(100)
         try {
             val unconfirmed = scan()
-            if (unconfirmed) delay = minOf(delay, 400)  // look again soon to confirm new text
+            if (unconfirmed) delay = minOf(delay, 250)  // look again soon to confirm new text
         } catch (e: Exception) {
             Log.w(TAG, "scan failed", e)
         }
@@ -204,7 +241,8 @@ class CaptureService : Service() {
             val diff = frameDiff(bitmap)
             staticScreen = diff != null && diff < 2.0
             val unconfirmed = tracks.any { it.seen < 2 }
-            if (diff != null && diff <= 0.6 && !unconfirmed) return false
+            val pending = tracks.any { !it.done }
+            if (diff != null && diff <= 0.6 && !unconfirmed && !pending) return false
             return process(bitmap)
         } finally {
             bitmap.recycle()
@@ -242,10 +280,11 @@ class CaptureService : Service() {
 
         // Follow each block from scan to scan: matches keep their translation and position,
         // new blocks are shown only once seen twice, shown blocks survive one missed scan.
+        val old = tracks
         val used = HashSet<Track>()
         val fresh = ArrayList<Track>()
         for (b in blocks) {
-            val t = tracks.filter { it !in used }.firstOrNull { iou(it.rect, b.rect) > 0.5f && similar(it.text, b.text) }
+            val t = old.filter { it !in used }.firstOrNull { iou(it.rect, b.rect) > 0.5f && similar(it.text, b.text) }
             if (t != null) {
                 used += t
                 t.seen++
@@ -259,22 +298,30 @@ class CaptureService : Service() {
                 fresh += Track(b.rect, b.lineHeight, b.text)
             }
         }
-        val carried = tracks.filter { it !in used }.onEach { it.missed++ }
+        val carried = old.filter { it !in used }.onEach { it.missed++ }
             .filter { staticScreen && it.seen >= 2 && it.missed <= 1 }
         tracks = fresh + carried
 
         for (t in tracks) cache[t.text]?.let { t.translation = it.ifEmpty { null }; t.done = true }
         publish()
-        val todo = tracks.filter { !it.done }.take(MAX_NEW_PER_SCAN)
-        for ((i, t) in todo.withIndex()) {
-            t.translation = translate(t.text)
-            t.done = true
-            if ((i + 1) % BATCH == 0) publish()
+        // Translate in the background, top to bottom, so scanning never waits for the translator and
+        // each result appears as soon as it is ready.
+        for (t in tracks.filter { !it.done && !it.queued }.take(MAX_NEW_PER_SCAN)) {
+            t.queued = true
+            pool.execute {
+                if (running && t in tracks) {
+                    t.translation = translate(t.text)
+                    t.done = true
+                    publish()
+                } else {
+                    t.queued = false  // the screen moved on: it can be queued again if it comes back
+                }
+            }
         }
-        publish()
         return tracks.any { it.seen < 2 }
     }
 
+    @Synchronized
     private fun publish() {
         val visible = tracks.filter { it.seen >= 2 && it.done && it.translation != null }
         shown = visible.map { TextRules.normalize(it.translation!!) }
@@ -341,6 +388,8 @@ class CaptureService : Service() {
 
     override fun onDestroy() {
         running = false
+        speech?.stop()
+        pool.shutdownNow()
         if (::handler.isInitialized) handler.removeCallbacksAndMessages(null)
         val view = overlay
         if (view != null) {
