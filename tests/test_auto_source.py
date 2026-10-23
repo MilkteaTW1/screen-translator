@@ -96,6 +96,8 @@ def test_translations_stay_on_screen_and_lead_while_scrolling():
                       "translation": "嗨", "done": True, "seen": 2, "missed": 0}]
     now = time.monotonic()
     worker.scrolling_until, worker.velocity = now + 0.3, (0.0, -500.0)  # scrolling down: text moves up
+    worker._last_follow = now  # the picture the tracks come from was taken just now
     moving = worker._snapshot(now)[0]
-    assert moving[4] == "嗨" and moving[1] == 500 - round(500 * appmod.SCROLL_LEAD)
+    # ahead by the display delay plus the (tiny) time since that picture
+    assert moving[4] == "嗨" and 500 - round(500 * (appmod.SCROLL_LEAD + 0.05)) <= moving[1] <= 500 - round(500 * appmod.SCROLL_LEAD)
     assert worker._snapshot(now + 0.5)[0][1] == 500

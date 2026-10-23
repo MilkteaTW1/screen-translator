@@ -162,8 +162,9 @@ class SpeechEngine(
         worker.execute {
             try {
                 val heard = whisper?.transcribe(normalize(audio), threads, language)
-                if (heard != null && forSentence == sentence) {
+                if (heard != null && forSentence == sentence && !stumble(heard.second)) {
                     val (code, text) = heard
+                    lastLive = text to forSentence
                     onPartial(text, "")
                     val out = translate(text, code)
                     if (forSentence == sentence && out.isNotEmpty()) onPartial(text, out)
@@ -174,6 +175,14 @@ class SpeechEngine(
                 liveBusy = false
             }
         }
+    }
+
+    private var lastLive = "" to -1
+
+    /** A reading far shorter than the last one of this sentence and not a part of it: a stumble; the line shown stays. */
+    private fun stumble(text: String): Boolean {
+        val (last, of) = lastLive
+        return of == sentence && text.length < 0.6 * last.length && !last.startsWith(text)
     }
 
     /** The translation of [said], spoken in [code]: "" when it is already the target language or nothing works. */

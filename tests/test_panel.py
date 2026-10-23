@@ -7,6 +7,9 @@ class _Overlay:
     def set_items(self, items):
         pass
 
+    def set_motion(self, vx, vy):
+        pass
+
     def set_capture_hidden(self, hidden):
         pass
 

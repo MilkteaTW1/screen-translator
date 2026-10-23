@@ -275,6 +275,10 @@ class SpeechWorker(QObject):
         text, info = transcribe(model, audio, language)
         if not text or epoch != self.epoch:  # the sentence ended while we were working: its final version is coming
             return
+        last = getattr(self, "_last_live", (-1, ""))
+        if last[0] == epoch and len(text) < 0.6 * len(last[1]) and not last[1].startswith(text):
+            return  # a reading far shorter than the last one and not a part of it: a stumble, keep what is shown
+        self._last_live = (epoch, text)
         self.partial.emit(text, self._translate(text, info.language))
 
     def _handle(self, model, audio):

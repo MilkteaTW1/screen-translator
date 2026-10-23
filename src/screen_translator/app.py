@@ -5,6 +5,7 @@ import ctranslate2  # noqa: F401
 import sentencepiece  # noqa: F401
 import ctypes
 import winreg
+import dataclasses
 import difflib
 import json
 import os
@@ -45,8 +46,9 @@ DEFAULTS = {
 MAX_BLOCKS = 40  # most text blocks translated per screen pass
 BATCH = 8  # blocks translated together (one engine call) and shown together
 SCROLL_SETTLE = 0.35  # seconds the page must stay still after scrolling before it is read again
-SCROLL_READ_EVERY = 0.8  # seconds between reads while the page keeps scrolling
-SCROLL_LEAD = 0.06  # seconds: while scrolling, boxes are drawn this far ahead (a screenshot is already late when drawn)
+SCROLL_READ_EVERY = 0.4  # seconds between reads while the page keeps scrolling (new text keeps arriving)
+SCROLL_LEAD = 0.03  # seconds of display delay: while scrolling, boxes are drawn this far ahead on top of the capture delay
+TRANSLATE_THREADS = 3
 POLL = 0.08  # seconds between cheap looks at the screen (grab + compare is ~30 ms); a scan starts when it changed
 CONFIRM_GAP = 0.1  # seconds before the second look that confirms newly seen text
 
@@ -118,6 +120,7 @@ class Worker(QObject):
     results = Signal(list)
     status = Signal(str)
     background = Signal(tuple)
+    motion = Signal(float, float)  # scroll velocity (px/s) so the overlay can keep boxes moving between scans
 
     def __init__(self, langs):
         super().__init__()
@@ -140,6 +143,11 @@ class Worker(QObject):
         self._recognizer, self._prev, self._prev_keep, self._prev_gray = None, None, None, None
         self._prev_gray_boxes = []
         self._last_scan = 0.0
+        self.async_scan = False  # read the screen on a thread of its own, so following a scroll never waits for OCR
+        self._scan = None  # the read in flight: {epoch, shift, future, width, height}
+        self._scan_pool = None
+        self._epoch = 0  # bumped when what a running read would find is no longer valid (settings, page change)
+        self.cum_shift = (0, 0)  # total scroll followed so far: a late read is moved by what the page did meanwhile
         self._boxes = []  # our own boxes in the picture being scanned
         self.static = False  # the screen barely changed since the previous scan
         self.scrolling_until = 0.0  # no OCR while the page moves; it is read again once it stops
@@ -152,6 +160,7 @@ class Worker(QObject):
         self.settings = settings
         self._use_engine(settings)
         self.tracks = []
+        self._epoch += 1
         with self._jobs_lock:
             self._jobs.clear()
         self.translator.clear()
@@ -166,9 +175,11 @@ class Worker(QObject):
         self.running = True
         self.dirty = True
         self.background_translation = True
+        self.async_scan = True
         self.thread = threading.Thread(target=self._loop, daemon=True)
         self.thread.start()
-        threading.Thread(target=self._translate_loop, daemon=True).start()
+        for _ in range(TRANSLATE_THREADS):  # several requests in flight: a screenful is not translated one group at a time
+            threading.Thread(target=self._translate_loop, daemon=True).start()
 
     def stop(self):
         self.running = False
@@ -246,6 +257,7 @@ class Worker(QObject):
             if shift != (0, 0):  # (0, 0): too little to measure yet
                 self._prev_gray, self._prev_gray_boxes = green, boxes
             if shift is None:  # the page changed: what we cover may be gone, and we cannot see under it
+                self._epoch += 1
                 self.tracks = [t for t in self.tracks if not t.get("covered")]
         else:
             self._prev_gray, self._prev_gray_boxes = green, boxes
@@ -262,6 +274,7 @@ class Worker(QObject):
                 self.velocity = (0.0, 0.0)
             self._last_follow = now
             self.scrolling_until = now + SCROLL_SETTLE
+            self.motion.emit(*self.velocity)
             # the overlay looks for empty space on the current picture, not on the one from before the scroll
             gray = (arr[::4, ::4, :3].astype(np.int32) * (114, 587, 299)).sum(axis=2) // 1000  # B, G, R
             self.background.emit((gray.astype(np.int16), self.origin))
@@ -269,6 +282,7 @@ class Worker(QObject):
         elif self.scrolling_until and now >= self.scrolling_until:
             self.scrolling_until = 0.0
             self.velocity = (0.0, 0.0)
+            self.motion.emit(0.0, 0.0)
             self.dirty = True  # read the settled page once
             self.results.emit(self._snapshot(now))
             self._settled_at = now
@@ -276,16 +290,56 @@ class Worker(QObject):
         # over other lines, and reading it would give fragments that look like new text.
         # A long scroll is still read now and then, so new text coming into view gets translated on the way.
         wait = (now < self.scrolling_until and now - self._last_scan < SCROLL_READ_EVERY) or now - self._settled_at < 0.2
-        if scan_due(changed, self.dirty, now - self._last_scan, s["interval"]) and not wait:
+        if self.async_scan:
+            self._finish_scan(boxes)
+        busy = self.async_scan and self._scan is not None
+        if scan_due(changed, self.dirty, now - self._last_scan, s["interval"]) and not wait and not busy:
             self._prev, self._prev_keep, self.dirty = small, keep, False
             gray = (arr[::4, ::4, :3].astype(np.int32) * (114, 587, 299)).sum(axis=2) // 1000  # B, G, R
             self.background.emit((gray.astype(np.int16), self.origin))
             self._boxes = boxes
-            self.results.emit(self._process(self._recognizer, shot, s))
-            self.status.emit(self._status_text())
-            # Text seen only once is not shown yet: look again soon to confirm it.
-            self.dirty = self.dirty or any(t["seen"] < 2 for t in self.tracks)
-            self._last_scan = time.monotonic()
+            if self.async_scan:
+                if self._scan_pool is None:
+                    from concurrent.futures import ThreadPoolExecutor
+                    self._scan_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="ocr")
+                self._scan = {"epoch": self._epoch, "shift": self.cum_shift, "width": shot.width, "height": shot.height,
+                              "future": self._scan_pool.submit(self._read, self._recognizer, shot, boxes)}
+                self._last_scan = time.monotonic()
+            else:
+                self.results.emit(self._process(self._recognizer, shot, s))
+                self.status.emit(self._status_text())
+                # Text seen only once is not shown yet: look again soon to confirm it.
+                self.dirty = self.dirty or any(t["seen"] < 2 for t in self.tracks)
+                self._last_scan = time.monotonic()
+
+    def _finish_scan(self, boxes):
+        """Takes in the read that has finished, if any. It was taken a moment ago and the page may have scrolled since:
+        the lines are moved by exactly that much, so they land where the text is now."""
+        job = self._scan
+        if job is None or not job["future"].done():
+            return
+        self._scan = None
+        try:
+            everything = job["future"].result()
+        except Exception as e:
+            self.status.emit(t("status_error", err=e))
+            return
+        if job["epoch"] != self._epoch:  # settings changed or the page was replaced while it was being read
+            self.dirty = True
+            return
+        dx, dy = self.cum_shift[0] - job["shift"][0], self.cum_shift[1] - job["shift"][1]
+        lines, edge = [], set()
+        for l in everything:
+            cut = not (l.y > 3 and l.y + l.h < job["height"] - 3)  # judged where it was seen, before it is moved
+            l = dataclasses.replace(l, x=l.x + dx, y=l.y + dy)
+            lines.append(l)
+            if cut:
+                edge.add(id(l))
+        self._boxes = boxes
+        self.results.emit(self._digest(lines, edge, self.settings))
+        self.status.emit(self._status_text())
+        self.dirty = self.dirty or any(t["seen"] < 2 for t in self.tracks)
+        self._last_scan = time.monotonic()
 
     def _follow_scroll(self, before, now, boxes=(), before_boxes=()):
         """The picture scrolled: move the translations with it right away (no OCR, no new translation), and drop
@@ -297,6 +351,7 @@ class Worker(QObject):
         if not shift or shift == (0, 0):
             return shift
         dx, dy = shift
+        self.cum_shift = (self.cum_shift[0] + dx, self.cum_shift[1] + dy)
         height, width = now.shape
         self._others = [(x + dx, y + dy, w, h, lh) for x, y, w, h, lh in self._others]
         self.tracks = [t for t in self.tracks if t["x"] + t["w"] > 0 and t["x"] < width
@@ -308,8 +363,13 @@ class Worker(QObject):
         While the page scrolls, everything is drawn a little ahead along the scroll."""
         ox, oy = self.origin
         if (time.monotonic() if now is None else now) < self.scrolling_until:
-            ox += int(round(self.velocity[0] * SCROLL_LEAD))
-            oy += int(round(self.velocity[1] * SCROLL_LEAD))
+            # The tracks are where the text was when the last picture was taken. By the time they are drawn the page
+            # has moved on: the time since that picture, plus a little for the display. (The overlay carries the boxes
+            # along from here until the next update.)
+            since = time.monotonic() - self._last_follow if self._last_follow else 0.0
+            lead = SCROLL_LEAD + min(0.25, max(0.0, since))
+            ox += int(round(self.velocity[0] * lead))
+            oy += int(round(self.velocity[1] * lead))
         items = [(x + ox, y + oy, w, h, None, lh) for x, y, w, h, lh in self._others]
         items += [(t["x"] + ox, t["y"] + oy, t["w"], t["h"], _visible(t), t["lh"]) for t in self.tracks]
         return items
@@ -322,11 +382,20 @@ class Worker(QObject):
         engine = t.engine or ("google" if t.google else "offline")  # nothing translated yet: the one that will be tried
         return i18n.t("status_running_google" if engine == "google" else "status_running_offline")
 
+    def _read(self, recognizer, shot, boxes):
+        """OCR of one picture (runs on the reading thread): lines that are not our own translations."""
+        return [l for l in recognizer.recognize(shot.bgra, shot.width, shot.height)
+                if self._cover_share((l.x, l.y, l.w, l.h), boxes) < 0.5]
+
     def _process(self, recognizer, shot, s):
+        everything = self._read(recognizer, shot, self._boxes)
+        edge = {id(l) for l in everything if not (l.y > 3 and l.y + l.h < shot.height - 3)}
+        return self._digest(everything, edge, s)
+
+    def _digest(self, everything, edge_ids, s):
+        """Turns what was read into followed text blocks and queues them for translation."""
         glossary = [t.strip() for t in s["glossary"].splitlines() if t.strip()]
         boxes = self._boxes
-        everything = [l for l in recognizer.recognize(shot.bgra, shot.width, shot.height)
-                      if self._cover_share((l.x, l.y, l.w, l.h), boxes) < 0.5]  # not our own translations
         supported = set(self.langs.values())
         target = s["target"]
 
@@ -334,7 +403,7 @@ class Worker(QObject):
 
         # A line cut off by the top or bottom edge reads as nonsense fragments: wait until it is fully in view.
         # (At the edge, so a paragraph that runs off the screen loses only its first or last line, never a middle one.)
-        lines = [l for l in everything if l.y > 3 and l.y + l.h < shot.height - 3 and not self._is_own_output(l.text)]
+        lines = [l for l in everything if id(l) not in edge_ids and not self._is_own_output(l.text)]
         # Merge first, judge afterwards: a name, hashtag or code in the middle of a sentence used to fail the check
         # for its own line, which left a hole in the paragraph and a mistranslated sentence. Judged as a whole it passes.
         merged = ocr.merge_paragraphs(lines)  # translate whole paragraphs, not fragments
@@ -375,8 +444,9 @@ class Worker(QObject):
                 if not self._same_place(t, b):  # it really moved (scrolling): follow it
                     t.update(x=b.x, y=b.y, w=b.w, h=b.h, lh=b.lh)
             else:
+                # While the page scrolls, text is on screen too briefly to be seen twice: it counts as confirmed at once.
                 t = {"x": b.x, "y": b.y, "w": b.w, "h": b.h, "lh": b.lh, "text": b.text, "tag": b.tag or s["source"],
-                     "translation": None, "done": False, "seen": 1, "missed": 0}
+                     "translation": None, "done": False, "seen": 2 if self.scrolling_until else 1, "missed": 0}
             fresh.append(t)
         carried = []
         for t in self.tracks:
@@ -677,6 +747,7 @@ class Panel(QWidget):
         self.start_on_launch.toggled.connect(self.apply)
         worker.status.connect(self.state.setText)
         worker.results.connect(overlay.set_items)
+        worker.motion.connect(overlay.set_motion)
         self.speech_enabled.toggled.connect(self.apply)
         self.speech_enabled.toggled.connect(self.on_speech_toggle)
         self.speech_enabled.toggled.connect(self._show_toggles)

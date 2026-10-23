@@ -63,6 +63,9 @@ class CaptureService : Service() {
         private const val COVER_SETTLE_MS = 400L
         private const val MOVING_SCAN_MS = 350L
         private const val RETRY_MS = 3000L
+        private const val SCROLL_SETTLE_MS = 350L  // the page counts as scrolling this long after the last measured shift
+        private const val SCROLL_TICK_MS = 50L  // while it scrolls, look at every new picture to keep the boxes on their text
+        private const val SCROLL_LEAD = 0.03f  // seconds of display delay, on top of the time since the picture was taken
         private const val JUMP = 8.0  // a sudden change of this size (app switch, scroll start) means everything shown is out of date
         private const val COVER_CHANGE = 2.5  // mean brightness change under a cover that means the text there changed
     }
@@ -117,6 +120,17 @@ class CaptureService : Service() {
     private var frame: Bitmap? = null  // the latest screen picture (reused), read again while nothing new arrives
     private var rereads = 0  // times the same picture was read again to confirm text
     private val rowBuffer = IntArray(4096)
+    private var prevGrid: ScrollTracker.Grid? = null  // the previous picture, coarse, to measure a scroll against
+    private var prevMask = listOf<FloatArray>()  // where our own boxes were drawn in it
+    @Volatile private var cumShift = 0  // total vertical scroll followed so far: a late OCR result is moved by what the page did meanwhile
+    private var lumaShift = 0  // cumShift when `luma` was sampled
+    private var velocityY = 0f  // px/s the page is scrolling (down is positive)
+    private var lastFollowAt = 0L
+    @Volatile private var scrollUntil = 0L
+    private var epoch = 0  // bumped when what a running OCR would find is no longer valid (the page was replaced)
+    @Volatile private var ocrBusy = false
+    private var ocrFrame: Bitmap? = null  // the picture handed to OCR: a copy, because `frame` is overwritten by the next one
+    private val onCapture = java.util.concurrent.Executor { handler.post(it) }
 
     override fun attachBaseContext(base: Context) = super.attachBaseContext(Ui.localized(base))
 
@@ -358,6 +372,8 @@ class CaptureService : Service() {
         if (!running || !screenOn) return
         var delay = prefs.intervalMs.toLong().coerceAtLeast(100)
         if (!staticScreen) delay = minOf(delay, MOVING_SCAN_MS)  // the screen is changing: keep up with it
+        if (SystemClock.uptimeMillis() < scrollUntil) delay = minOf(delay, SCROLL_TICK_MS)
+        else if (velocityY != 0f) { velocityY = 0f; overlay?.glide = 0f; publish() }  // the scroll ended
         try {
             val unconfirmed = scan()
             if (unconfirmed) delay = minOf(delay, 300)  // look again soon to confirm new text
@@ -404,17 +420,27 @@ class CaptureService : Service() {
             staticScreen = screenDiff != null && screenDiff < 2.0
             val jumped = screenDiff != null && screenDiff > JUMP && lastScreenDiff < 3.0
             if (screenDiff != null) lastScreenDiff = screenDiff
-            if (jumped && tracks.isNotEmpty()) {
-                // Our old translations are still on screen and would be read together with the new text.
-                // Take them all down and read the next frame clean. (Not on every large change: a video keeps changing.)
-                tracks = emptyList()
-                forceScan = true
-                publish()
-                return true
+            // A page that scrolls shifts as one piece: measure the shift and move the translations with it.
+            var followed = false
+            val moving = image != null && screenDiff != null && screenDiff > 0.6
+            val grid = if (image != null) gridOf(bitmap) else null
+            if (moving && grid != null && tracks.isNotEmpty()) {
+                val dy = followScroll(grid)
+                followed = dy != null && dy != 0
+                if (dy == null && (jumped || screenDiff!! > JUMP)) {
+                    // Not a shift: another page, or a video. Our old translations are still on screen and would be read
+                    // together with the new text: take them all down and read the next frame clean.
+                    tracks = emptyList()
+                    epoch++
+                    forceScan = true
+                    publish()
+                    return true
+                }
             }
+            if (grid != null) { prevGrid = grid; prevMask = ownRects() }
             val unconfirmed = tracks.any { it.seen < 2 }
             val pending = tracks.any { !it.done }
-            val released = watchCovers(bitmap, screenDiff)
+            val released = if (SystemClock.uptimeMillis() < scrollUntil) false else watchCovers(bitmap, screenDiff)
             if (released) {  // a cover no longer matches its text: take it down, and read the next frame without it
                 forceScan = true
                 publish()
@@ -423,8 +449,62 @@ class CaptureService : Service() {
             if (screenDiff != null && screenDiff <= 0.6 && !unconfirmed && !pending && !forceScan) return false
             forceScan = false
             sampleLuma(bitmap)
-            return process(bitmap)
+            return startOcr(bitmap)
         }
+    }
+
+    /** Coarse brightness picture of the screen (every 8th pixel across, every 2nd row down) for measuring a scroll. */
+    private fun gridOf(bitmap: Bitmap): ScrollTracker.Grid {
+        val stepX = 8
+        val stepY = 2
+        val cols = width / stepX
+        val rows = height / stepY
+        val v = IntArray(cols * rows)
+        for (r in 0 until rows) {
+            val line = row(bitmap, r * stepY)
+            for (c in 0 until cols) v[r * cols + c] = line[c * stepX] shr 8 and 0xFF  // the green channel is enough
+        }
+        return ScrollTracker.Grid(cols, rows, stepX, stepY, v)
+    }
+
+    /** Where our own translations are drawn (left, top, right, bottom): they stay put while the page scrolls and
+     *  would hide the shift, so they are painted out of both pictures. */
+    private fun ownRects(): List<FloatArray> = tracks.filter { isShown(it) && !it.stale }.map { t ->
+        val r = if (t.mode == OverlayView.COVER) coverRect(t) else sideRect(t)
+        floatArrayOf(r.left, r.top, r.right, r.bottom)
+    }
+
+    /** Moves the tracks with a scrolled page. Returns the shift in pixels (down positive), 0 if nothing moved, null if
+     *  the picture did not simply shift. */
+    private fun followScroll(grid: ScrollTracker.Grid): Int? {
+        val before = prevGrid ?: return null
+        if (before.cols != grid.cols || before.rows != grid.rows) return null
+        val masks = ownRects() + prevMask
+        val a = before.copy().apply { mask(masks) }
+        val b = grid.copy().apply { mask(masks) }
+        val dy = ScrollTracker.estimate(a, b) ?: return null
+        if (dy == 0) return 0
+        val rowsMoved = dy / grid.stepY
+        val now = SystemClock.uptimeMillis()
+        for (t in tracks) {
+            val c0 = (t.rect.left / grid.stepX).toInt().coerceIn(0, grid.cols - 1)
+            val c1 = (t.rect.right / grid.stepX).toInt().plus(1).coerceIn(c0 + 1, grid.cols)
+            val r0 = (t.rect.top / grid.stepY).toInt().coerceIn(0, grid.rows - 1)
+            val r1 = (t.rect.bottom / grid.stepY).toInt().plus(1).coerceIn(r0 + 1, grid.rows)
+            val hidden = isShown(t) && !t.stale  // under our own box: its pixels say nothing, it goes with the picture
+            if (!hidden && ScrollTracker.stayed(a, b, rowsMoved, r0, r1, c0, c1)) continue  // a fixed header or toolbar
+            t.rect.offset(0f, dy.toFloat())
+            t.sig = null  // read the picture under the cover again once the page has settled
+            t.shownAt = now
+        }
+        tracks = tracks.filter { it.rect.bottom > 0 && it.rect.top < height }
+        cumShift += dy
+        val dt = (now - lastFollowAt) / 1000f
+        velocityY = if (dt > 0f && dt < 0.5f) 0.5f * velocityY + 0.5f * (dy / dt) else dy / 0.1f
+        lastFollowAt = now
+        scrollUntil = now + SCROLL_SETTLE_MS
+        publish()
+        return dy
     }
 
     /** The area a cover occupies: the text block, a little wider and taller when the translation needs the room. */
@@ -497,6 +577,7 @@ class CaptureService : Service() {
         }
         luma = out
         lumaCols = cols
+        lumaShift = cumShift
     }
 
     /** True if [r] is on the screen and is one flat colour (nothing drawn there), whatever that colour is. */
@@ -504,8 +585,10 @@ class CaptureService : Service() {
         if (r.left < 0 || r.top < 0 || r.right > width || r.bottom > height || lumaCols == 0) return false
         val step = 4
         val rows = luma.size / lumaCols
+        val moved = (cumShift - lumaShift).toFloat()  // the page has scrolled since `luma` was sampled
         val x0 = (r.left / step).toInt(); val x1 = minOf(lumaCols - 1, (r.right / step).toInt())
-        val y0 = (r.top / step).toInt(); val y1 = minOf(rows - 1, (r.bottom / step).toInt())
+        val y0 = ((r.top - moved) / step).toInt(); val y1 = minOf(rows - 1, ((r.bottom - moved) / step).toInt())
+        if (y0 < 0) return false
         var sum = 0L; var n = 0
         for (y in y0..y1) for (x in x0..x1) { sum += luma[y * lumaCols + x]; n++ }
         if (n < 4) return false
@@ -573,13 +656,43 @@ class CaptureService : Service() {
         return sum.toDouble() / sample.size to (if (outsideCount > 0) outside.toDouble() / outsideCount else 0.0)
     }
 
-    private fun process(bitmap: Bitmap): Boolean {
-        val result = Tasks.await(recognizer!!.process(InputImage.fromBitmap(bitmap, 0)), 15, TimeUnit.SECONDS)
+    /** Starts reading the picture on ML Kit's own thread, so following a scroll goes on meanwhile. The result is
+     *  applied by [applyOcr], moved by whatever the page scrolled in the meantime. Returns true if some text has
+     *  been seen only once so far. */
+    private fun startOcr(bitmap: Bitmap): Boolean {
+        if (ocrBusy) return tracks.any { it.seen < 2 }
+        ocrBusy = true
+        var copy = ocrFrame
+        if (copy == null || copy.width != bitmap.width || copy.height != bitmap.height) {
+            copy?.recycle()
+            copy = Bitmap.createBitmap(bitmap.width, bitmap.height, Bitmap.Config.ARGB_8888)
+            ocrFrame = copy
+        }
+        android.graphics.Canvas(copy!!).drawBitmap(bitmap, 0f, 0f, null)
+        val shiftThen = cumShift
+        val epochThen = epoch
+        recognizer!!.process(InputImage.fromBitmap(copy, 0)).addOnCompleteListener(onCapture) { task ->
+            ocrBusy = false
+            if (!running || !task.isSuccessful) {
+                if (!task.isSuccessful) Log.w(TAG, "ocr failed: ${task.exception?.message}")
+                return@addOnCompleteListener
+            }
+            if (epochThen != epoch) { forceScan = true; return@addOnCompleteListener }
+            try {
+                applyOcr(task.result, (cumShift - shiftThen).toFloat())
+            } catch (e: Exception) {
+                Log.w(TAG, "scan failed", e)
+            }
+        }
+        return tracks.any { it.seen < 2 }
+    }
+
+    private fun applyOcr(result: com.google.mlkit.vision.text.Text, late: Float): Boolean {
         val joiner = if (src.script == Script.LATIN) " " else ""
         val blocks = result.textBlocks.mapNotNull { b ->
             val box = b.boundingBox ?: return@mapNotNull null
             val text = b.lines.joinToString(joiner) { it.text }.trim()
-            Block(RectF(box), text, box.height().toFloat() / maxOf(1, b.lines.size))
+            Block(RectF(box).apply { offset(0f, late) }, text, box.height().toFloat() / maxOf(1, b.lines.size))
         }.filter { TextRules.looksLikeSource(it.text, src, prefs.skipNames) && !isOwnOutput(it.text) }
             .sortedWith(compareBy({ it.rect.top }, { it.rect.left }))
 
@@ -659,7 +772,11 @@ class CaptureService : Service() {
             "above=${visible.count { it.mode == OverlayView.ABOVE }} below=${visible.count { it.mode == OverlayView.BELOW }} " +
             "cover=${visible.count { it.mode == OverlayView.COVER }}")
         shown = visible.map { TextRules.normalize(it.translation!!) }
-        overlay?.boxes = visible.map { OverlayView.Box(it.rect, it.translation!!, it.lineHeight, it.mode) }
+        val scrolling = SystemClock.uptimeMillis() < scrollUntil
+        // The tracks are where the text was when the last picture was taken; the page has moved on since.
+        val ahead = if (scrolling) velocityY * (SCROLL_LEAD + ((SystemClock.uptimeMillis() - lastFollowAt) / 1000f).coerceIn(0f, 0.25f)) else 0f
+        overlay?.glide = if (scrolling) velocityY else 0f
+        overlay?.boxes = visible.map { OverlayView.Box(RectF(it.rect).apply { offset(0f, ahead) }, it.translation!!, it.lineHeight, it.mode) }
     }
 
     /** Translations of several blocks: Google takes them in one request; whatever it can't do goes offline one by one. */

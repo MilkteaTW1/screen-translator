@@ -26,8 +26,14 @@ class OverlayView(context: Context) : View(context) {
     var boxes: List<Box> = emptyList()
         set(value) {
             field = value
+            boxesAt = android.os.SystemClock.uptimeMillis()
             postInvalidate()
         }
+
+    /** The page is scrolling at this many px/s (down positive): between two updates the boxes are carried along at that
+     *  speed, so they glide with their text instead of jumping once per update. 0: not scrolling. */
+    @Volatile var glide = 0f
+    private var boxesAt = 0L
 
     /** What was just heard and its translation, newest last; [partial] is the sentence still being spoken. */
     @Volatile
@@ -77,6 +83,9 @@ class OverlayView(context: Context) : View(context) {
 
     override fun onDraw(canvas: Canvas) {
         drawCaptions(canvas)
+        val carried = if (glide != 0f) glide * ((android.os.SystemClock.uptimeMillis() - boxesAt) / 1000f).coerceIn(0f, 0.25f) else 0f
+        canvas.save()
+        canvas.translate(0f, carried)
         for (b in boxes) {
             if (b.mode == COVER) {
                 if (!hideCovers) drawCover(canvas, b)
@@ -95,6 +104,8 @@ class OverlayView(context: Context) : View(context) {
             layout.draw(canvas)
             canvas.restore()
         }
+        canvas.restore()
+        if (glide != 0f) postInvalidateOnAnimation()
     }
 
     /** No free space near the text: the translation is laid over it, shrunk to fit the same area. */
@@ -133,10 +144,10 @@ class OverlayView(context: Context) : View(context) {
         val lines = captions.takeLast(4)
         val live = partial
         if (lines.isEmpty() && live.first.isEmpty()) return
-        val boxWidth = width * 0.9f
+        val boxWidth = width * 0.94f
         val left = (width - boxWidth) / 2
-        val said = TextPaint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(200, 200, 200); textSize = 14 * density }
-        val spoken = TextPaint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(255, 235, 140); textSize = 20 * density }
+        val said = TextPaint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(210, 210, 210); textSize = 18 * density }
+        val spoken = TextPaint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(255, 235, 140); textSize = 26 * density; isFakeBoldText = true }
         var bottom = height - 72 * density
         // The sentence being spoken shows its last words only, so a long one never fills the screen.
         val rows = lines + (if (live.first.isNotEmpty()) listOf(live.first.takeLast(160) to live.second.takeLast(120)) else emptyList())
@@ -144,7 +155,8 @@ class OverlayView(context: Context) : View(context) {
             val layouts = listOf(translated to spoken, heard to said).filter { it.first.isNotEmpty() }.map { (t, p) ->
                 StaticLayout.Builder.obtain(t, 0, t.length, p, (boxWidth - 24).toInt()).build()
             }
-            val boxHeight = layouts.sumOf { it.height } + 16f
+            val live = heard == rows.last().first && translated == rows.last().second && this.partial.first.isNotEmpty()
+            val boxHeight = maxOf(layouts.sumOf { it.height } + 16f, if (live) 2f * (spoken.fontSpacing + said.fontSpacing) * 0.75f + 16f else 0f)  // the live row does not jump as it grows
             val top = bottom - boxHeight
             canvas.drawRoundRect(RectF(left, top, left + boxWidth, bottom), 12f, 12f, fill)
             var y = top + 8

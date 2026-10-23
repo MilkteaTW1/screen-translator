@@ -32,6 +32,11 @@ class Overlay(QWidget):
         self.hide_covers = False  # translations laid over text can be switched off with the chip
         self.has_covers = False
         self.painted = []  # (x0, y0, x1, y1) in physical pixels of every translation box currently drawn
+        self.motion = (0.0, 0.0)  # scroll velocity in px/s: between two scans the boxes keep moving at this speed
+        self.items_time = time.monotonic()
+        self._glide = QTimer(self)
+        self._glide.setInterval(16)
+        self._glide.timeout.connect(self.update)
 
     def painted_rects(self):
         return self.painted
@@ -60,7 +65,18 @@ class Overlay(QWidget):
         cell = self.luma[y0:y1 + 1, x0:x1 + 1].astype(int)
         return (abs(cell - cell.mean()) > 14).mean() <= 0.03
 
+    def set_motion(self, vx, vy):
+        """The page is scrolling at (vx, vy) px/s: redraw every frame with the boxes carried along, so they glide
+        with the text instead of jumping once per scan. (0, 0): it stopped."""
+        self.motion = (vx, vy)
+        if vx or vy:
+            self._glide.start()
+        else:
+            self._glide.stop()
+            self.update()
+
     def set_items(self, items):
+        self.items_time = time.monotonic()
         # OCR boxes wobble by a few pixels between scans. Keep the previous box when the same text
         # is still roughly where it was, so translations don't shiver.
         steady = []
@@ -97,7 +113,9 @@ class Overlay(QWidget):
         self.drawn = {}
         painted = []
         k = self.scale
-        srcs = [(QRectF(x / k, y / k, w / k, h / k), text, lh / k) for x, y, w, h, text, lh in self.items]
+        dt = min(0.25, time.monotonic() - self.items_time) if self.motion != (0.0, 0.0) else 0.0
+        gx, gy = self.motion[0] * dt, self.motion[1] * dt  # how far the page has moved since these boxes were placed
+        srcs = [(QRectF((x + gx) / k, (y + gy) / k, w / k, h / k), text, lh / k) for x, y, w, h, text, lh in self.items]
         placed = []  # translation boxes already placed (logical pixels)
         for i, (src, text, lh) in enumerate(srcs):
             if not text:  # untranslated line: nothing to draw
@@ -202,9 +220,9 @@ class CaptionOverlay(QWidget):
         self.setAttribute(Qt.WA_ShowWithoutActivating)
         self.setAttribute(Qt.WA_TransparentForMouseEvents)
         geo = screen.availableGeometry()
-        self.width_px = int(geo.width() * 0.7)
-        self.setGeometry(geo.x() + (geo.width() - self.width_px) // 2, geo.y() + geo.height() - 340,
-                         self.width_px, 330)
+        self.width_px = int(geo.width() * 0.8)
+        self.setGeometry(geo.x() + (geo.width() - self.width_px) // 2, geo.y() + geo.height() - 460,
+                         self.width_px, 450)
         self.lines = []  # (time, said, translation)
         self.live = None  # (said, translation) of the sentence still being spoken
         self.timer = QTimer(self)
@@ -245,8 +263,8 @@ class CaptionOverlay(QWidget):
         p.setRenderHint(QPainter.Antialiasing)
         p.setRenderHint(QPainter.TextAntialiasing)
         said_font, tr_font = QFont("Microsoft JhengHei UI"), QFont("Microsoft JhengHei UI")
-        said_font.setPixelSize(15)
-        tr_font.setPixelSize(22)
+        said_font.setPixelSize(20)
+        tr_font.setPixelSize(30)
         inner = self.width_px - 24
         y = self.height() - 6
         shown = [(said, translation) for _t, said, translation in self.lines]
@@ -258,6 +276,8 @@ class CaptionOverlay(QWidget):
             heights = [QFontMetricsF(f).boundingRect(QRectF(0, 0, inner, 10000), int(Qt.TextWordWrap), t).height()
                        for t, f, _c in rows]
             box = sum(heights) + 12
+            if self.live and (said, translation) == self.live:
+                box = max(box, 2 * (QFontMetricsF(tr_font).lineSpacing() + QFontMetricsF(said_font).lineSpacing()) * 0.5 + 12)  # the live row does not jump as it grows
             top = y - box
             p.setPen(Qt.NoPen)
             p.setBrush(QColor(20, 20, 20, 225))

@@ -81,6 +81,7 @@ def _wordlike(token):
     return t.isdigit() or (t.isalpha() and not re.search(r"[a-z][A-Z]", t))
 
 
+_OFFLINE_LOCK = threading.Lock()
 FUNCTION_WORDS = {"the", "a", "an", "of", "to", "in", "on", "for", "and", "or", "is", "are", "was", "with", "at", "by",
                   "from", "this", "that", "it", "be", "we", "you", "your", "our", "not", "as", "has", "have"}
 
@@ -344,7 +345,9 @@ class Translator:
         if rest:
             engine = self.engine if len(rest) < len(todo) else "offline"
             try:
-                for item, out in zip(rest, self._argos_many([item[2] for item in rest], src, dst)):
+                with _OFFLINE_LOCK:  # the offline engine takes one caller at a time; Google requests run side by side
+                    offline = self._argos_many([item[2] for item in rest], src, dst)
+                for item, out in zip(rest, offline):
                     outs[item[0]] = out
             except Exception:
                 pass  # left out of `outs`: not cached, so they are tried again
