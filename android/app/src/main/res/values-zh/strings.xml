@@ -34,11 +34,11 @@
     <string name="update_failed">更新下載失敗:%1$s</string>
     <string name="allow_overlay">請允許「顯示在其他應用程式上層」,再按一次開始</string>
     <string name="speech_model_title">下載語音模型?</string>
-    <string name="speech_model_text">聽 %1$s 需要離線語音模型(約 %2$d MB,只需下載一次)。要怎麼下載?</string>
+    <string name="speech_model_text">語音翻譯需要離線語音模型(約 %1$d MB,只需下載一次),它能聽懂各種語言並自動偵測是哪一種。要怎麼下載?</string>
     <string name="wifi_only">只用 Wi-Fi</string>
     <string name="any_network">任何網路</string>
     <string name="not_now">先不要</string>
-    <string name="speech_model_needed">需要 %1$s 的語音模型</string>
+    <string name="speech_model_needed">語音翻譯需要語音模型</string>
     <string name="speech_model_downloading">正在下載語音模型…</string>
     <string name="speech_model_progress">正在下載語音模型 %1$d%%</string>
     <string name="speech_model_ready">語音模型已就緒</string>
@@ -83,4 +83,11 @@
     <string name="source_phone">手機播放的聲音(影片、通話、直播)</string>
     <string name="source_mic">麥克風</string>
     <string name="source_note">要聽到手機播放的聲音,Android 規定必須分享螢幕:開始語音翻譯時會詢問一次。除非你也開始螢幕翻譯,否則不會翻譯畫面。</string>
+    <string name="speech_error">語音翻譯停止了:%1$s</string>
+    <string name="speech_silent_phone">沒有收到手機的聲音。有在播放嗎?有些 App 不允許錄下它的聲音。</string>
+    <string name="speech_silent_mic">麥克風沒有收到聲音。</string>
+    <string name="auto_detect">自動偵測</string>
+    <string name="speech_model_label">語音模型</string>
+    <string name="model_base">Base:較準確(%1$d MB)</string>
+    <string name="model_tiny">Tiny:較輕、較快(%1$d MB)</string>
 </resources>

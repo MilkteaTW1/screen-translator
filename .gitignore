@@ -5,3 +5,5 @@ build/
 dist/
 *.spec
 settings.json
+android/.kotlin/
+android/app/.cxx/

@@ -35,9 +35,14 @@ class Prefs(context: Context) {
     var speechMic: Boolean
         get() = sp.getBoolean("speechMic", false)
         set(v) = sp.edit().putBoolean("speechMic", v).apply()
-    var speechLang: Int
-        get() = sp.getInt("speechLang", 0).coerceIn(0, VoskModels.languages.lastIndex)
-        set(v) = sp.edit().putInt("speechLang", v).apply()
+    /** The spoken language: "auto" (Whisper detects it) or a language code. */
+    var spokenLanguage: String
+        get() = sp.getString("spokenLanguage", "auto") ?: "auto"
+        set(v) = sp.edit().putString("spokenLanguage", v).apply()
+    /** The Whisper model: "base" (better) or "tiny" (lighter). */
+    var speechModel: String
+        get() = sp.getString("speechModel", "base") ?: "base"
+        set(v) = sp.edit().putString("speechModel", v).apply()
 
     /** Interface language ("" follows the phone). */
     var uiLanguage: String
@@ -58,7 +63,7 @@ class Prefs(context: Context) {
         get() = sp.getLong("lastUpdateCheck", 0)
         set(v) = sp.edit().putLong("lastUpdateCheck", v).apply()
 
-    val speechLanguage get() = VoskModels.languages[speechLang]
+    val whisperModel get() = WhisperModel.spec(speechModel)
     val sourceLang get() = Langs.sources[source]
     val targetLang get() = Langs.targets[target]
 }

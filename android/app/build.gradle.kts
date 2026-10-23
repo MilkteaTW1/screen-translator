@@ -11,8 +11,17 @@ android {
         applicationId = "io.github.milkteatw1.screentranslator"
         minSdk = 26
         targetSdk = 34
-        versionCode = 12
-        versionName = "0.5.10"
+        versionCode = 13
+        versionName = "0.5.11"
+        externalNativeBuild { cmake { arguments += listOf("-DANDROID_STL=c++_static") } }
+    }
+    // Whisper (whisper.cpp, in src/main/cpp) is built with the NDK for each ABI.
+    ndkVersion = "27.0.12077973"
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/cpp/CMakeLists.txt")
+            version = "3.22.1"
+        }
     }
 
     // The release key lives outside the repo: its path and passwords come from ~/.gradle/gradle.properties
@@ -61,8 +70,6 @@ dependencies {
     implementation("com.google.android.gms:play-services-mlkit-text-recognition-japanese:16.0.1")
     implementation("com.google.android.gms:play-services-mlkit-text-recognition-korean:16.0.1")
     implementation("com.google.mlkit:translate:17.0.3")
-    // Offline speech recognition (models are downloaded on demand, after the user agrees).
-    implementation("com.alphacephei:vosk-android:0.3.47")
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20231013")  // the Android one is only a stub in unit tests
 }

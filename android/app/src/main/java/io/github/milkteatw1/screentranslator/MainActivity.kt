@@ -149,8 +149,16 @@ class MainActivity : ComponentActivity() {
         speechCard.addView(soundSource)
         speechCard.addView(Ui.text(ctx, getString(R.string.source_note), 12f, Ui.MUTED).apply { setPadding(0, dp(8), 0, 0) })
         speechCard.addView(Ui.label(ctx, getString(R.string.spoken_language)))
-        val speechLang = Ui.spinner(ctx, VoskModels.languages.map { it.label }, prefs.speechLang)
+        // Whisper hears every language and says which it was; a fixed language only helps when detection guesses wrong.
+        val spokenCodes = listOf("auto") + Langs.sources.map { it.code }
+        val speechLang = Ui.spinner(ctx, listOf(getString(R.string.auto_detect)) + Langs.sources.map { it.label },
+            spokenCodes.indexOf(prefs.spokenLanguage).coerceAtLeast(0))
         speechCard.addView(speechLang)
+        speechCard.addView(Ui.label(ctx, getString(R.string.speech_model_label)))
+        val modelChoice = Ui.spinner(ctx, WhisperModel.models.map {
+            getString(if (it.name == "base") R.string.model_base else R.string.model_tiny, it.megabytes)
+        }, WhisperModel.models.indexOfFirst { it.name == prefs.speechModel }.coerceAtLeast(0))
+        speechCard.addView(modelChoice)
         pages[1].addView(speechCard)
 
         // Quality: the engine, names, speed.
@@ -222,9 +230,20 @@ class MainActivity : ComponentActivity() {
             prefs.useGoogle = google.isChecked
             prefs.glossary = glossary.text.toString()
             prefs.speechMic = soundSource.selectedItemPosition == 1
-            prefs.speechLang = speechLang.selectedItemPosition
+            prefs.spokenLanguage = spokenCodes[speechLang.selectedItemPosition]
+            prefs.speechModel = WhisperModel.models[modelChoice.selectedItemPosition].name
         }
         for (s in listOf(google, skip)) s.setOnCheckedChangeListener { _, _ -> save() }
+        val saveOnPick = object : AdapterView.OnItemSelectedListener {
+            var first = 2
+            override fun onItemSelected(p: AdapterView<*>?, v: View?, pos: Int, id: Long) {
+                if (first > 0) { first--; return }
+                save()
+            }
+            override fun onNothingSelected(p: AdapterView<*>?) {}
+        }
+        speechLang.onItemSelectedListener = saveOnPick
+        modelChoice.onItemSelectedListener = saveOnPick
         soundSource.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
             var first = 1
             override fun onItemSelected(p: AdapterView<*>?, v: View?, pos: Int, id: Long) {
@@ -407,20 +426,20 @@ class MainActivity : ComponentActivity() {
     /** Speech recognition needs an offline model (about 40 MB); the user decides whether and how to download it. */
     private fun ensureSpeechModel(onReady: () -> Unit) {
         if (!prefs.speech) { onReady(); return }
-        val model = VoskModels.forLang(prefs.speechLanguage)
-        if (VoskModels.isInstalled(this, model)) { onReady(); return }
+        val model = prefs.whisperModel
+        if (WhisperModel.isInstalled(this, model)) { onReady(); return }
         AlertDialog.Builder(this)
             .setTitle(R.string.speech_model_title)
-            .setMessage(getString(R.string.speech_model_text, prefs.speechLanguage.label, model.megabytes))
+            .setMessage(getString(R.string.speech_model_text, model.megabytes))
             .setPositiveButton(R.string.wifi_only) { _, _ -> downloadModel(model, true, onReady) }
             .setNeutralButton(R.string.any_network) { _, _ -> downloadModel(model, false, onReady) }
-            .setNegativeButton(R.string.not_now) { _, _ -> status.text = getString(R.string.speech_model_needed, prefs.speechLanguage.label) }
+            .setNegativeButton(R.string.not_now) { _, _ -> status.text = getString(R.string.speech_model_needed) }
             .show()
     }
 
-    private fun downloadModel(model: VoskModel, wifiOnly: Boolean, onReady: () -> Unit) {
+    private fun downloadModel(model: WhisperModel.Spec, wifiOnly: Boolean, onReady: () -> Unit) {
         status.text = getString(R.string.speech_model_downloading)
-        VoskModels.download(this, model, wifiOnly,
+        WhisperModel.download(this, model, wifiOnly,
             progress = { pct -> runOnUiThread { status.text = getString(R.string.speech_model_progress, pct) } },
             done = { err -> runOnUiThread {
                 if (err == null) { status.text = getString(R.string.speech_model_ready); onReady() }
@@ -433,7 +452,7 @@ class MainActivity : ComponentActivity() {
         // Needed even with Google on: it is what translates when Google can't (no internet, or "too many requests").
         val langs = mutableListOf(prefs.targetLang.code)
         if (prefs.screenText) langs += prefs.sourceLang.code
-        if (prefs.speech) langs += prefs.speechLanguage.code
+        if (prefs.speech && prefs.spokenLanguage != "auto") langs += prefs.spokenLanguage
         val needed = langs.filter { it != "en" }.distinct()
         val manager = RemoteModelManager.getInstance()
         manager.getDownloadedModels(TranslateRemoteModel::class.java).addOnSuccessListener { have ->

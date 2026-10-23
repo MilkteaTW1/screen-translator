@@ -137,7 +137,9 @@ class CaptureService : Service() {
         tgt = prefs.targetLang
         glossary = prefs.glossary.lines().map { it.trim() }.filter { it.isNotEmpty() }
         val hasProjection = intent.hasExtra(EXTRA_DATA)
-        startInForeground(hasProjection, prefs.speech && (prefs.speechMic || !hasProjection))
+        // Recording what the phone plays is microphone use too: without this type Android records only silence once
+        // the app is in the background (that is, whenever you are watching something else).
+        startInForeground(hasProjection, prefs.speech)
         handler = Handler(thread.looper)
         try {
             setUp(intent, hasProjection)
@@ -170,7 +172,7 @@ class CaptureService : Service() {
             publish()
         }
         if (speech && !speechOn) {
-            if (prefs.speechMic || projection == null) startInForeground(projection != null, true)
+            startInForeground(projection != null, true)
             setUpSpeech(Intent())
             speechOn = true
         } else if (!speech && speechOn) {
@@ -329,7 +331,7 @@ class CaptureService : Service() {
 
     private fun setUpSpeech(intent: Intent) {
         val engine = SpeechEngine(
-            this, prefs.speechLanguage, tgt, glossary, prefs.useGoogle,
+            this, prefs.spokenLanguage, prefs.whisperModel, tgt, glossary, prefs.useGoogle,
             onPartial = { said, translation -> overlay?.partial = said to translation },
             onLine = { said, translated ->
                 synchronized(captions) {
@@ -338,7 +340,10 @@ class CaptureService : Service() {
                     overlay?.captions = captions.toList()
                 }
             },
-            onStatus = { Log.i(TAG, it) },
+            onStatus = { message ->
+                Log.i(TAG, message)
+                if (message.isNotEmpty() && message.first() in "⚠🔇") overlay?.partial = message to ""  // the user must see these
+            },
         )
         speech = engine
         // Hearing what the phone plays needs screen sharing (Android's rule); without it, listen to the microphone.

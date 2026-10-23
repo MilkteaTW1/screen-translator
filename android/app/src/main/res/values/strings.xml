@@ -35,11 +35,11 @@
     <string name="update_failed">Update download failed: %1$s</string>
     <string name="allow_overlay">Allow \"Display over other apps\", then press Start again</string>
     <string name="speech_model_title">Download speech model?</string>
-    <string name="speech_model_text">Listening in %1$s needs an offline speech model (about %2$d MB, downloaded once). How do you want to download?</string>
+    <string name="speech_model_text">Speech translation needs an offline speech model (about %1$d MB, downloaded once). It hears every language and detects which one is spoken. How do you want to download?</string>
     <string name="wifi_only">Wi-Fi only</string>
     <string name="any_network">Any network</string>
     <string name="not_now">Not now</string>
-    <string name="speech_model_needed">Speech model needed for %1$s</string>
+    <string name="speech_model_needed">The speech model is needed for speech translation</string>
     <string name="speech_model_downloading">Downloading speech model …</string>
     <string name="speech_model_progress">Downloading speech model %1$d%%</string>
     <string name="speech_model_ready">Speech model ready</string>
@@ -84,4 +84,11 @@
     <string name="source_phone">What the phone plays (videos, calls, streams)</string>
     <string name="source_mic">The microphone</string>
     <string name="source_note">Hearing what the phone plays needs screen sharing (an Android rule): you are asked once when speech translation starts. The screen itself is only translated if you also start screen translation.</string>
+    <string name="speech_error">Speech translation stopped: %1$s</string>
+    <string name="speech_silent_phone">No sound from the phone. Is something playing? Some apps do not allow their sound to be recorded.</string>
+    <string name="speech_silent_mic">No sound from the microphone.</string>
+    <string name="auto_detect">Detect automatically</string>
+    <string name="speech_model_label">Speech model</string>
+    <string name="model_base">Base: more accurate (%1$d MB)</string>
+    <string name="model_tiny">Tiny: lighter and faster (%1$d MB)</string>
 </resources>
