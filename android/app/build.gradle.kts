@@ -11,8 +11,8 @@ android {
         applicationId = "io.github.milkteatw1.screentranslator"
         minSdk = 26
         targetSdk = 34
-        versionCode = 13
-        versionName = "0.5.11"
+        versionCode = 14
+        versionName = "0.5.12"
         externalNativeBuild { cmake { arguments += listOf("-DANDROID_STL=c++_static") } }
     }
     // Whisper (whisper.cpp, in src/main/cpp) is built with the NDK for each ABI.

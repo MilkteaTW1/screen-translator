@@ -46,8 +46,13 @@ Java_io_github_milkteatw1_screentranslator_WhisperModel_nativeTranscribe(
     params.print_realtime = false;
     params.print_special = false;
     params.print_timestamps = false;
+    params.temperature_inc = 0.0f;  // no slow retries at higher temperatures: a late caption is worse than a rough one
 
     jsize n = env->GetArrayLength(audio);
+    // The encoder normally looks at a fixed 30 s window however short the speech is. Shrinking it to the length of the
+    // audio (plus some room) makes short clips several times faster, which is what live captions need. 50 = frames per second.
+    int frames = (int) (n / 16000.0 * 50.0) + 200;
+    params.audio_ctx = frames < 750 ? 750 : (frames > 1500 ? 1500 : frames);
     jfloat *samples = env->GetFloatArrayElements(audio, nullptr);
     int rc = whisper_full(ctx, params, samples, n);
     env->ReleaseFloatArrayElements(audio, samples, JNI_ABORT);

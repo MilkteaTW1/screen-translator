@@ -61,6 +61,8 @@ class CaptureService : Service() {
         private const val MAX_REREADS = 4
         private const val MAX_CAPTIONS = 4
         private const val COVER_SETTLE_MS = 400L
+        private const val MOVING_SCAN_MS = 350L
+        private const val RETRY_MS = 3000L
         private const val JUMP = 8.0  // a sudden change of this size (app switch, scroll start) means everything shown is out of date
         private const val COVER_CHANGE = 2.5  // mean brightness change under a cover that means the text there changed
     }
@@ -70,6 +72,7 @@ class CaptureService : Service() {
         @Volatile var translation: String? = null
         @Volatile var done = false
         @Volatile var queued = false
+        @Volatile var retryAt = 0L  // a translation that failed is tried again after this moment
         @Volatile var mode = -1  // where the translation goes; decided once, so it never hops around
         var seen = 1
         var missed = 0
@@ -354,6 +357,7 @@ class CaptureService : Service() {
     private fun tick() {
         if (!running || !screenOn) return
         var delay = prefs.intervalMs.toLong().coerceAtLeast(100)
+        if (!staticScreen) delay = minOf(delay, MOVING_SCAN_MS)  // the screen is changing: keep up with it
         try {
             val unconfirmed = scan()
             if (unconfirmed) delay = minOf(delay, 300)  // look again soon to confirm new text
@@ -553,7 +557,7 @@ class CaptureService : Service() {
         val old = previous
         previous = sample
         if (old == null || old.size != sample.size) return null
-        val own = tracks.filter { it.seen >= 2 && it.done && it.translation != null }
+        val own = tracks.filter { isShown(it) }
             .map { if (it.mode == OverlayView.COVER) coverRect(it) else sideRect(it) }
         var sum = 0L
         var outside = 0L
@@ -616,26 +620,36 @@ class CaptureService : Service() {
         publish()
         // Translate in the background, top to bottom, so scanning never waits for the translator and
         // each result appears as soon as it is ready.
-        for (group in tracks.filter { !it.done && !it.queued }.take(MAX_NEW_PER_SCAN).chunked(BATCH)) {
+        val now = SystemClock.uptimeMillis()
+        for (group in tracks.filter { !it.done && !it.queued && it.retryAt <= now }.take(MAX_NEW_PER_SCAN).chunked(BATCH)) {
             group.forEach { it.queued = true }
             pool.execute {
-                val live = group.filter { running && it in tracks }
-                group.filter { it !in live }.forEach { it.queued = false }  // the screen moved on: queue again if it comes back
-                if (live.isNotEmpty()) {
-                    translateMany(live.map { it.text }).forEachIndexed { i, out ->
-                        live[i].translation = out
-                        live[i].done = true
+                // Everything asked for is translated and cached, even a block that has left the screen meanwhile
+                // (scrolling, moving content): it is usually back a moment later, at another place, and then shows at once.
+                val results = if (running) translateMany(group.map { it.text }) else emptyList()
+                group.forEachIndexed { i, t ->
+                    val out = results.getOrNull(i)
+                    if (out != null || cache[t.text] != null) {
+                        t.translation = out
+                        t.done = true
+                    } else {
+                        t.retryAt = SystemClock.uptimeMillis() + RETRY_MS  // it failed (offline, rate limit): try again, don't give up
                     }
-                    publish()
+                    t.queued = false
                 }
+                publish()
             }
         }
         return tracks.any { it.seen < 2 }
     }
 
+    /** Translated and worth showing. Text is shown once seen on two scans (a one-off read is often noise), but while
+     *  the screen is changing nothing is ever seen twice, so a translation that is ready is shown at once. */
+    private fun isShown(t: Track) = (t.seen >= 2 || !staticScreen) && t.done && t.translation != null
+
     @Synchronized
     private fun publish() {
-        val visible = tracks.filter { it.seen >= 2 && it.done && it.translation != null && !it.stale }
+        val visible = tracks.filter { isShown(it) && !it.stale }
         // Top to bottom, not in the order the translations happened to finish: the same screen always gets the same layout.
         for (t in visible) if (t.shownAt == 0L) t.shownAt = SystemClock.uptimeMillis()
         for (t in visible.filter { it.mode < 0 }.sortedWith(compareBy({ it.rect.top }, { it.rect.left }))) t.mode = place(t, tracks)
