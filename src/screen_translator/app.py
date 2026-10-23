@@ -330,17 +330,24 @@ class Worker(QObject):
         supported = set(self.langs.values())
         target = s["target"]
 
-        def wanted(l):  # in the source language (each line says which OCR language read it), and not already the target
-            code = ocr_tag_to_code(l.tag or s["source"], supported)
-            return (looks_like_source(l.text, l.tag or s["source"], l.w, l.h, s["skip_names"])
-                    and argos_code(code) != argos_code(target) and not self._is_own_output(l.text))
+        code_of = lambda l: ocr_tag_to_code(l.tag or s["source"], supported)
 
-        # a line cut off by the top or bottom edge reads as nonsense fragments: wait until it is fully in view
-        kept = [l for l in everything if wanted(l) and l.y > 3 and l.y + l.h < shot.height - 3]
-        blocks = ocr.merge_paragraphs(kept)  # translate whole paragraphs, not fragments
+        # A line cut off by the top or bottom edge reads as nonsense fragments: wait until it is fully in view.
+        # (At the edge, so a paragraph that runs off the screen loses only its first or last line, never a middle one.)
+        lines = [l for l in everything if l.y > 3 and l.y + l.h < shot.height - 3 and not self._is_own_output(l.text)]
+        # Merge first, judge afterwards: a name, hashtag or code in the middle of a sentence used to fail the check
+        # for its own line, which left a hole in the paragraph and a mistranslated sentence. Judged as a whole it passes.
+        merged = ocr.merge_paragraphs(lines)  # translate whole paragraphs, not fragments
+
+        def wanted(b):  # in the source language (each block says which OCR language read it), and not already the target
+            return (looks_like_source(b.text, b.tag or s["source"], b.w, b.lh or b.h, s["skip_names"])
+                    and argos_code(code_of(b)) != argos_code(target))
+
+        blocks = [b for b in merged if wanted(b)]
         blocks.sort(key=lambda b: (b.y, b.x))
-        kept_ids = {id(l) for l in kept}
-        self._others = [(l.x, l.y, l.w, l.h, l.h) for l in everything if id(l) not in kept_ids]
+        kept_ids = {id(b) for b in blocks}
+        edge = [l for l in everything if l not in lines]
+        self._others = [(b.x, b.y, b.w, b.h, b.h) for b in merged if id(b) not in kept_ids] +                        [(l.x, l.y, l.w, l.h, l.h) for l in edge]
 
         # OCR reads the same text a little differently on every scan (a misread letter, a different
         # line break, a pass where it is missed altogether). Follow each text block from scan to scan

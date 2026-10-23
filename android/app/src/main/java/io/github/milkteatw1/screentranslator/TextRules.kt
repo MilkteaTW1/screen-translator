@@ -49,17 +49,24 @@ object TextRules {
         return t.isNotEmpty() && (t.all { it.isDigit() } || (t.all { it.isLetter() } && !camel.containsMatchIn(t)))
     }
 
-    /** Rejects URLs, @handles, ids, lone words, menu bars and (optionally) names. */
+    private val functionWords = setOf("the", "a", "an", "of", "to", "in", "on", "for", "and", "or", "is", "are", "was", "with",
+        "at", "by", "from", "this", "that", "it", "be", "we", "you", "your", "our", "not", "as", "has", "have")
+
+    /** Rejects URLs, @handles, ids, lone words, menu bars and (optionally) names. Judged on the words left once
+     *  handles, hashtags and links are set aside, so a sentence that merely mentions one still counts as a sentence. */
     fun looksTranslatableLatin(text: String, skipNames: Boolean): Boolean {
-        if (urlish.containsMatchIn(text)) return false
         val tokens = text.split(spaces).filter { it.isNotEmpty() }
         if (tokens.isEmpty()) return false
-        if (tokens.count { wordlike(it) }.toDouble() / tokens.size < 0.7) return false
-        if (tokens.count { val s = stripEdges(it); s.length >= 3 && s.all { c -> c.isLetter() } } < 2) return false
+        val words = tokens.filter { !urlish.containsMatchIn(it) && !it.startsWith("@") && !it.startsWith("#") }
+        if (words.size < 2 && !(tokens.size >= 3 && words.isNotEmpty())) return false  // a link, a handle, or one word
+        if (words.count { wordlike(it) }.toDouble() / words.size < 0.6) return false
+        if (words.count { val s = stripEdges(it); s.length >= 3 && s.all { c -> c.isLetter() } } < 2) return false
         val endsSentence = text.trimEnd().let { it.endsWith(".") || it.endsWith("!") || it.endsWith("?") }
-        if (tokens.size >= 5 && !endsSentence &&
-            tokens.count { it.first().isUpperCase() }.toDouble() / tokens.size >= 0.8) return false
-        if (skipNames && tokens.size <= 2 && tokens.all { it.first().isUpperCase() }) return false
+        val lowered = words.map { stripEdges(it).lowercase() }.toSet()
+        if (words.size >= 5 && !endsSentence && lowered.none { it in functionWords } &&
+            words.count { it.first().isUpperCase() }.toDouble() / words.size >= 0.8) return false
+        val names = words.filter { !it.all { c -> c.isDigit() } }  // "Donald J. Trump @handle 2h"
+        if (skipNames && names.size <= (if (words.size < tokens.size) 3 else 2) && names.all { it.first().isUpperCase() }) return false
         return true
     }
 

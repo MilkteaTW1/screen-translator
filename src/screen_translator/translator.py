@@ -81,20 +81,28 @@ def _wordlike(token):
     return t.isdigit() or (t.isalpha() and not re.search(r"[a-z][A-Z]", t))
 
 
+FUNCTION_WORDS = {"the", "a", "an", "of", "to", "in", "on", "for", "and", "or", "is", "are", "was", "with", "at", "by",
+                  "from", "this", "that", "it", "be", "we", "you", "your", "our", "not", "as", "has", "have"}
+
+
 def looks_translatable_latin(text, skip_names):
-    """Reject URLs, @handles, ids/hashes, single words and (optionally) names: they don't translate well."""
-    if URLISH_RE.search(text):
-        return False
+    """Reject URLs, @handles, ids/hashes, single words and (optionally) names: they don't translate well.
+    Judged on the words that are left once handles, hashtags and links are set aside, so a sentence that merely
+    mentions one still counts as a sentence."""
     tokens = text.split()
-    if sum(_wordlike(t) for t in tokens) / len(tokens) < 0.7:
+    words = [t for t in tokens if not URLISH_RE.search(t) and not t.startswith(("@", "#"))]
+    if len(words) < 2 and not (len(tokens) >= 3 and len(words) >= 1):
+        return False  # a link, a handle, or one word
+    if sum(_wordlike(t) for t in words) / max(1, len(words)) < 0.6:
         return False  # mostly ids, hashes or mixed letters and digits
-    if sum(1 for t in tokens if t.strip(".,!?:;()\"'-").isalpha() and len(t.strip(".,!?:;()\"'-")) >= 3) < 2:
+    if sum(1 for t in words if t.strip(".,!?:;()\"'-").isalpha() and len(t.strip(".,!?:;()\"'-")) >= 3) < 2:
         return False  # a lone word or label: usually a name or a brand
-    if len(tokens) >= 5 and sum(t[:1].isupper() for t in tokens) / len(tokens) >= 0.8 \
-            and not text.rstrip().endswith((".", "!", "?")):
+    lowered = {t.strip(".,!?:;()\"'-").lower() for t in words}
+    if len(words) >= 5 and not (lowered & FUNCTION_WORDS) and sum(t[:1].isupper() for t in words) / len(words) >= 0.8             and not text.rstrip().endswith((".", "!", "?")):
         return False  # a menu bar ("Home About Mission Donate ...")
-    if skip_names and len(tokens) <= 2 and all(t[:1].isupper() for t in tokens):
-        return False  # "Bill Gates", "Major Hurricane"
+    names = [t for t in words if not t.isdigit()]  # "Bill Gates", "Major Hurricane", "Donald J. Trump @handle 2h"
+    if skip_names and len(names) <= (3 if len(words) < len(tokens) else 2) and all(t[:1].isupper() for t in names):
+        return False
     return True
 
 

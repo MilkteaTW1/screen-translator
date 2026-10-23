@@ -114,3 +114,24 @@ def test_translation_engine_loads_before_the_ocr_modules():
     env = dict(os.environ, PYTHONPATH="src", QT_QPA_PLATFORM="offscreen")
     out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, env=env, timeout=120)
     assert out.stdout.strip() == "True", out.stderr[-500:]
+
+
+FEED_SENTENCES = [  # real lines from a social feed: a mention, a hashtag or capitals must not make a sentence "not source"
+    "We've been improving the #JetpackCompose documentation with loads of small fixes, but also new docs in general!",
+    "Donald J. Trump TO THE GREAT PEOPLE OF ALABAMA, MAKE A PLAN TO VOTE FOR:",
+    "Katherine Robertson for Attorney General",
+    "LIVE: President Trump Holds a Rally in Sioux City, IA 10/22/26",
+    "grok @bot 0.75.2 is out!",
+]
+FEED_NOISE = ["developer.android.com/develop/ui/com...", "@real... CJ", "Donald J. Trump @realDonal... 2", "249 754 2.8K 579K",
+              "Rebecca Franks"]
+
+
+def test_sentences_that_mention_a_handle_or_use_capitals_are_still_source():
+    for text in FEED_SENTENCES:
+        assert looks_like_source(text, "en-US", 600, 40), text
+
+
+def test_links_handles_counters_and_names_are_still_not_source():
+    for text in FEED_NOISE:
+        assert not looks_like_source(text, "en-US", 300, 40), text
