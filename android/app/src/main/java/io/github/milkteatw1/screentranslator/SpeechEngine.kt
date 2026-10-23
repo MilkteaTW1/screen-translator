@@ -40,7 +40,7 @@ class SpeechEngine(
         private const val TAG = "ScreenTranslator"
         private const val RATE = 16000
         private const val CHUNK = RATE / 10  // 0.1 s
-        private const val LIVE_STEP = 0.8  // seconds of new speech between live updates of the sentence being spoken (as on the computer)
+        private const val LIVE_STEP = 0.3  // seconds of new speech between live updates: each new word shows up as soon as the phone has read it
         private const val MAX_BACKLOG = 3  // finished sentences waiting; more are dropped to stay real-time
     }
 

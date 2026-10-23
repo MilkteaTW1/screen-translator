@@ -14,6 +14,7 @@ class Segmenter(private val rate: Int = 16000) {
         const val SOFT_PAUSE = 0.25
         const val MAX_SEGMENT = 8.0  // cut here whatever happens
         const val MIN_SPEECH = 0.4  // shorter sounds are clicks, not speech
+        const val LIVE_MIN_SPEECH = 0.2  // the live line starts after this much speech: the first word shows up at once
         const val PRE_ROLL = 3  // chunks kept from before the speech started
     }
 
@@ -28,7 +29,7 @@ class Segmenter(private val rate: Int = 16000) {
     val speaking get() = buf.isNotEmpty()
 
     /** The sentence so far, or null when nobody is speaking. */
-    fun snapshot(): FloatArray? = if (speech >= MIN_SPEECH) join(buf).also { fresh = 0.0 } else null
+    fun snapshot(): FloatArray? = if (speech >= LIVE_MIN_SPEECH) join(buf).also { fresh = 0.0 } else null
 
     /** Feeds one chunk; returns a finished sentence, or null. */
     fun feed(chunk: FloatArray): FloatArray? {
