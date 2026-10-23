@@ -47,6 +47,7 @@ class SpeechEngine(
     @Volatile private var running = false
     private var recorder: AudioRecord? = null
     private val worker = Executors.newSingleThreadExecutor()  // all Whisper work, one piece at a time
+    private val translating = Executors.newSingleThreadExecutor()  // translation, beside Whisper so listening never waits for the network
     @Volatile private var backlog = 0
     @Volatile private var liveBusy = false
     @Volatile private var sentence = 0  // counts finished sentences: a late live update of an old one is dropped
@@ -127,6 +128,8 @@ class SpeechEngine(
             worker.shutdown()  // what is queued still finishes; then the model is freed
             Thread {
                 worker.awaitTermination(60, TimeUnit.SECONDS)
+                translating.shutdown()
+                translating.awaitTermination(30, TimeUnit.SECONDS)
                 whisper?.close()
                 synchronized(translators) { translators.values.forEach { it.close() } }
             }.start()
@@ -144,7 +147,7 @@ class SpeechEngine(
                 val heard = whisper?.transcribe(normalize(audio), threads, language)
                 if (heard != null) {
                     val (code, text) = heard
-                    onLine(text, translate(text, code))
+                    translating.execute { onLine(text, translate(text, code)) }
                 }
                 if (forSentence == sentence) onPartial("", "")
             } catch (e: Throwable) {
@@ -166,8 +169,10 @@ class SpeechEngine(
                     val (code, text) = heard
                     lastLive = text to forSentence
                     onPartial(text, "")
-                    val out = translate(text, code)
-                    if (forSentence == sentence && out.isNotEmpty()) onPartial(text, out)
+                    translating.execute {
+                        val out = translate(text, code)
+                        if (forSentence == sentence && out.isNotEmpty()) onPartial(text, out)
+                    }
                 }
             } catch (e: Throwable) {
                 Log.w(TAG, "live speech failed: ${e.message}")
