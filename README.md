@@ -2,6 +2,8 @@
 
 **English** | [繁體中文](#screen-translator-螢幕翻譯)
 
+**[⬇ Download for Windows or Android | 下載 Windows / Android 版](https://github.com/MilkteaTW1/screen-translator/releases/latest)** (free, MIT)
+
 ![Screen Translator in action](docs/promo.gif)
 
 A free screen translator for Windows (and Android). It reads the text on your screen with the built-in
