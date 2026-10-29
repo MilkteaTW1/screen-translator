@@ -106,6 +106,10 @@ To add an interface language, add one JSON file to [src/screen_translator/locale
 [README there](src/screen_translator/locales/README.md) explains how.
 Help is wanted on everything in [docs/KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md).
 
+## Need something custom?
+
+Custom features, integrations or setup help are available. See [墨鋒 Inkacuity](https://inkacuity.com/services/simple-programming) or email [ink@inkacuity.com](mailto:ink@inkacuity.com).
+
 ## License
 
 MIT
@@ -200,6 +204,10 @@ build.bat
 想新增介面語言,只要在 [src/screen_translator/locales](src/screen_translator/locales) 加一個 JSON 檔,
 做法見[該資料夾的說明](src/screen_translator/locales/README.md)。
 歡迎協助 [docs/KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md) 裡列出的問題。
+
+## 需要客製？
+
+想要專屬功能、整合或部署協助？歡迎找我，詳情請見 [墨鋒 Inkacuity](https://inkacuity.com/services/simple-programming)，或寄信到 [ink@inkacuity.com](mailto:ink@inkacuity.com)。
 
 ## 授權
 

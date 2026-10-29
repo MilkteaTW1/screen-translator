@@ -1,0 +1,24 @@
+name: Bug report / 問題回報
+description: Something did not work as expected.
+title: "[bug] "
+labels: ["bug"]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, what you saw. Add a screenshot if it helps.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: screen-translator version
+      placeholder: "v0.5.16"
+    validations:
+      required: true
+  - type: input
+    id: windows
+    attributes:
+      label: Windows version and languages
+      placeholder: "Windows 11 23H2, English to Traditional Chinese"
