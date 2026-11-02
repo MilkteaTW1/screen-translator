@@ -16,3 +16,10 @@ def english_interface():
     i18n.load("en")
     yield
     i18n.load("en")
+
+
+@pytest.fixture(autouse=True)
+def no_blocking_dialogs(monkeypatch):
+    """A machine without the language packs asks to download them in a modal box; nobody is there to click it."""
+    from PySide6.QtWidgets import QMessageBox
+    monkeypatch.setattr(QMessageBox, "exec", lambda self: 0)
