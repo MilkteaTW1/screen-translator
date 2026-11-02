@@ -46,6 +46,8 @@ Your normal use of the computer is not disturbed.
 Download `ScreenTranslator-Setup-x.y.z.exe` from the [latest release](../../releases/latest) and run it (about 70 MB, no admin
 rights needed; an optional task starts it with Windows). Language packs are **not** bundled: the app asks before
 downloading each one (50-100 MB), or you can import `.argosmodel` files you already have.
+The installer is not code-signed, so Windows SmartScreen may warn: click *More info*, then *Run anyway*.
+Translation goes to Google by default (the text is sent to Google); turn it off in the settings to stay fully offline.
 
 ## Android
 
@@ -158,6 +160,8 @@ MIT
 到 [Releases](../../releases) 下載 `ScreenTranslator-Setup-x.y.z.exe` 並執行(約 70 MB,不需要系統管理員權限,
 可勾選開機自動啟動)。語言包不包含在安裝檔裡:選語言時程式會先詢問再下載(每個 50~100 MB),
 也可以匯入你已經有的 `.argosmodel` 檔。
+安裝檔沒有程式碼簽章,Windows SmartScreen 可能會警告:按「其他資訊」再按「仍要執行」。
+翻譯預設會送到 Google(文字會傳給 Google);在設定中關閉後才是完全離線。
 
 ## Android 手機版
 
