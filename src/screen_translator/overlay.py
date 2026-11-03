@@ -3,6 +3,8 @@
 import ctypes
 import time
 
+import numpy as np
+
 from PySide6.QtCore import QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QFont, QFontMetricsF, QPainter
 from PySide6.QtWidgets import QWidget
@@ -31,6 +33,8 @@ class Overlay(QWidget):
         self.luma_origin = (0, 0)
         self.hide_covers = False  # translations laid over text can be switched off with the chip
         self.has_covers = False
+        self.colors = None
+        self.looks = {}  # text -> (background, ink) of its cover
         self.painted = []  # (x0, y0, x1, y1) in physical pixels of every translation box currently drawn
         self.motion = (0.0, 0.0)  # scroll velocity in px/s: between two scans the boxes keep moving at this speed
         self.items_time = time.monotonic()
@@ -47,9 +51,26 @@ class Overlay(QWidget):
         ctypes.windll.user32.SetWindowDisplayAffinity(
             int(self.winId()), WDA_EXCLUDEFROMCAPTURE if hidden else 0)
 
-    def set_background(self, luma, origin=(0, 0)):
-        """The latest screenshot as a coarse brightness map; lets us tell empty space (of any colour) from text."""
-        self.luma, self.luma_origin = luma, origin
+    def set_background(self, luma, origin=(0, 0), colors=None):
+        """The latest screenshot as a coarse brightness map (and the same in colour); lets us tell empty space
+        (of any colour) from text, and paint a cover in the colour of the page it hides."""
+        self.luma, self.luma_origin, self.colors = luma, origin, colors
+
+    def cover_look(self, r):
+        """(background, text) colours for a cover over the logical-pixel rectangle [r]: the colour the page has
+        there (the median, so the letters themselves don't tint it) and a text colour that reads on it."""
+        if self.colors is None:
+            return None
+        k, st = self.scale, self.STEP
+        ox, oy = self.luma_origin
+        rows, cols = self.colors.shape[:2]
+        x0, x1 = max(0, int((r.left() * k - ox) // st)), min(cols - 1, int((r.right() * k - ox) // st))
+        y0, y1 = max(0, int((r.top() * k - oy) // st)), min(rows - 1, int((r.bottom() * k - oy) // st))
+        if x1 < x0 or y1 < y0:
+            return None
+        red, green, blue = (int(v) for v in np.median(self.colors[y0:y1 + 1, x0:x1 + 1].reshape(-1, 3), axis=0))
+        light = 0.299 * red + 0.587 * green + 0.114 * blue > 140
+        return QColor(red, green, blue), QColor(25, 25, 25) if light else QColor(245, 245, 245)
 
     def is_blank(self, r):
         """True if the logical-pixel rectangle [r] is one flat colour on the screen (nothing drawn there)."""
@@ -90,6 +111,7 @@ class Overlay(QWidget):
                     self.items = list(items)
                     # where a translation could not go beside its text was decided on another part of the page
                     self.modes = {t: m for t, m in self.modes.items() if m != "cover"}
+                    self.looks.clear()
                     self.update()
                 return
         for x, y, w, h, text, lh in items:
@@ -102,6 +124,7 @@ class Overlay(QWidget):
             self.items = steady
             texts = {i[4] for i in steady}
             self.modes = {t: m for t, m in self.modes.items() if t in texts}
+            self.looks = {t: v for t, v in self.looks.items() if t in texts}
             self.update()
 
     def paintEvent(self, _):
@@ -132,10 +155,16 @@ class Overlay(QWidget):
                 continue
             painted.append((rect.left() * k, rect.top() * k, rect.right() * k, rect.bottom() * k))
             p.setPen(Qt.NoPen)
-            p.setBrush(QColor(20, 20, 20, 255 if mode == "cover" else 225))  # a cover must hide the text under it
+            fill, ink = QColor(20, 20, 20, 225), QColor(255, 235, 140)
+            if mode == "cover":
+                if text not in self.looks:  # decided once: our own box, once drawn, would colour the next sample
+                    self.looks[text] = self.cover_look(rect)
+                # the page's own colour, so it reads as the text replaced, not a label stuck on it (the chip shows the original)
+                fill, ink = self.looks[text] or (QColor(20, 20, 20), ink)
+            p.setBrush(fill)  # a cover must hide the text under it
             p.drawRoundedRect(rect, 4, 4)
             p.setFont(font)
-            p.setPen(QColor(255, 235, 140))
+            p.setPen(ink)
             align = Qt.AlignCenter if mode == "cover" else Qt.AlignVCenter | Qt.AlignLeft  # a cover reads as a label
             p.drawText(rect.adjusted(6, 0, -6, 0), align | Qt.TextWordWrap, text)
         self.painted = painted

@@ -48,6 +48,8 @@ rights needed; an optional task starts it with Windows). Language packs are **no
 downloading each one (50-100 MB), or you can import `.argosmodel` files you already have.
 The installer is not code-signed, so Windows SmartScreen may warn: click *More info*, then *Run anyway*.
 Translation goes to Google by default (the text is sent to Google); turn it off in the settings to stay fully offline.
+Optionally set your own server (Quality tab: LibreTranslate, or an OpenAI-compatible one such as Ollama or LM Studio). It is used when Google cannot be, before the offline model. The text goes only to that address; the API key is saved in `settings.json` as plain text.
+When a translation has to be laid over its text, it is painted in the page's own colour so it reads as the text replaced; the round button hides the covers to show the original.
 Google's translations are remembered in `%APPDATA%\ScreenTranslator\translations.jsonl` so the same text is not sent again. That file is plain text and holds what was on your screen; turn the option off in the settings and it is deleted.
 
 ## Android
@@ -163,6 +165,8 @@ MIT
 也可以匯入你已經有的 `.argosmodel` 檔。
 安裝檔沒有程式碼簽章,Windows SmartScreen 可能會警告:按「其他資訊」再按「仍要執行」。
 翻譯預設會送到 Google(文字會傳給 Google);在設定中關閉後才是完全離線。
+可在「品質」分頁設定自己的伺服器(LibreTranslate,或 Ollama、LM Studio 這類 OpenAI 相容的),Google 不能用時先用它,再退回離線模型。文字只會送到你填的位址;API 金鑰以明文存在 `settings.json`。
+翻譯框必須蓋在原文上時,會用該處頁面的底色,看起來像原文被換掉;小圓鈕可一鍵隱藏覆蓋、看原文。
 Google 的翻譯會記在 `%APPDATA%\ScreenTranslator\translations.jsonl`,相同文字不會重新送出。這個檔案是明文,內容就是你螢幕上出現過的文字;在設定中關閉這個選項就會刪除。
 
 ## Android 手機版

@@ -42,6 +42,7 @@ DEFAULTS = {
     "autostart": False, "start_on_launch": False,
     "speech_enabled": False, "speech_source": "system", "speech_model": "base", "speech_lang": "auto",
     "use_google": True,
+    "server_kind": "off", "server_url": "", "server_key": "", "server_model": "",
     "ui_language": "",  # interface language; empty = the one Windows is set to
 }
 MAX_BLOCKS = 40  # most text blocks translated per screen pass
@@ -189,6 +190,9 @@ class Worker(QObject):
 
     def _use_engine(self, s):
         self.translator.google = bool(s.get("use_google", True))
+        kind, url = s.get("server_kind", "off"), s.get("server_url", "").strip()
+        self.translator.server = ({"kind": kind, "url": url, "key": s.get("server_key", ""),
+                                   "model": s.get("server_model", "")} if kind != "off" and url else None)
         if s.get("disk_cache", True):
             self.translator.disk = self.translator.disk or DiskCache(CACHE_PATH)
         else:
@@ -309,7 +313,7 @@ class Worker(QObject):
             self.motion.emit(*self.velocity)
             # the overlay looks for empty space on the current picture, not on the one from before the scroll
             gray = (arr[::4, ::4, :3].astype(np.int32) * (114, 587, 299)).sum(axis=2) // 1000  # B, G, R
-            self.background.emit((gray.astype(np.int16), self.origin))
+            self.background.emit((gray.astype(np.int16), self.origin, arr[::4, ::4, 2::-1].copy()))  # brightness, and RGB
             self.results.emit(self._snapshot(now))
         elif self.scrolling_until and now >= self.scrolling_until:
             self.scrolling_until = 0.0
@@ -328,7 +332,7 @@ class Worker(QObject):
         if scan_due(changed, self.dirty, now - self._last_scan, s["interval"]) and not wait and not busy:
             self._prev, self._prev_keep, self.dirty = small, keep, False
             gray = (arr[::4, ::4, :3].astype(np.int32) * (114, 587, 299)).sum(axis=2) // 1000  # B, G, R
-            self.background.emit((gray.astype(np.int16), self.origin))
+            self.background.emit((gray.astype(np.int16), self.origin, arr[::4, ::4, 2::-1].copy()))  # brightness, and RGB
             self._boxes = boxes
             if self.async_scan:
                 if self._scan_pool is None:
@@ -411,6 +415,8 @@ class Worker(QObject):
         if t.missing_packs:
             need = ", ".join(f"{a}→{b}" for a, b in sorted(t.missing_packs))
             return i18n.t("status_packs_needed", names=need)
+        if t.server and t.engine == "server":
+            return i18n.t("status_running_server")
         return i18n.t({"ok": "status_running_google", "limited": "status_google_limited",
                        "unreachable": "status_google_unreachable"}.get(t.google_state(), "status_running_offline"))
 
@@ -705,6 +711,15 @@ class Panel(QWidget):
         self.autostart = self._check("autostart", s["autostart"])
         self.start_on_launch = self._check("start_on_launch", s["start_on_launch"])
         self.google = self._check("google_enable", s["use_google"])
+        self.server_kind = QComboBox()
+        for kind in ("off", "libretranslate", "openai"):
+            self.server_kind.addItem("", kind)
+        self._select(self.server_kind, s["server_kind"])
+        self.server_url = QLineEdit(s["server_url"])
+        self.server_url.setPlaceholderText("http://localhost:5000  /  http://localhost:11434/v1")
+        self.server_key = QLineEdit(s["server_key"])
+        self.server_key.setEchoMode(QLineEdit.Password)
+        self.server_model = QLineEdit(s["server_model"])
         self.speech_enabled = self._check("speech_enable", s["speech_enabled"])
         self.speech_source = QComboBox()
         self.speech_source.addItem("", "system")
@@ -782,6 +797,12 @@ class Panel(QWidget):
         self._text(engine.setTitle, "group_engine")
         box = QVBoxLayout(engine)
         box.addWidget(self.google)
+        server_form = QFormLayout()
+        self._row(server_form, "server_kind", self.server_kind)
+        self._row(server_form, "server_url", self.server_url)
+        self._row(server_form, "server_key", self.server_key)
+        self._row(server_form, "server_model", self.server_model)
+        box.addLayout(server_form)
         lay.addWidget(engine)
         lay.addStretch(1)
         self._tab(quality, "tab_quality")
@@ -831,6 +852,9 @@ class Panel(QWidget):
         self.kata.toggled.connect(self.apply)
         self.glossary.textChanged.connect(self.apply)
         self.google.toggled.connect(self.apply)
+        self.server_kind.currentIndexChanged.connect(self.apply)
+        for w in (self.server_url, self.server_key, self.server_model):
+            w.editingFinished.connect(self.apply)
         self.autostart.toggled.connect(self.apply)
         self.start_on_launch.toggled.connect(self.apply)
         worker.status.connect(self.state.setText)
@@ -880,6 +904,8 @@ class Panel(QWidget):
         for setter, key, values in self._texts:
             setter(t(key, **values))
         self.glossary.setPlaceholderText(t("glossary_placeholder"))
+        for i, key in enumerate(("server_off", "server_libre", "server_openai")):
+            self.server_kind.setItemText(i, t(key))
         self.speech_source.setItemText(0, t("audio_system"))
         self.speech_source.setItemText(1, t("audio_mic"))
         self.speech_lang.setItemText(0, t("auto_detect"))
@@ -927,6 +953,8 @@ class Panel(QWidget):
             "skip_names": self.skip_names.isChecked(),
             "disk_cache": self.disk_cache.isChecked(),
             "use_google": self.google.isChecked(),
+            "server_kind": self.server_kind.currentData(), "server_url": self.server_url.text(),
+            "server_key": self.server_key.text(), "server_model": self.server_model.text(),
             "autostart": self.autostart.isChecked(), "start_on_launch": self.start_on_launch.isChecked(),
             "speech_enabled": self.speech_enabled.isChecked(), "speech_source": self.speech_source.currentData(),
             "speech_model": self.speech_model.currentData(), "speech_lang": self.speech_lang.currentData(),

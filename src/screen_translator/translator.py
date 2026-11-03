@@ -5,6 +5,7 @@ import re
 import threading
 import time
 import urllib.parse
+import urllib.request
 import zlib
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -277,6 +278,47 @@ def google_translate_group(texts, src, dst):
     return lines if len(lines) == len(texts) else None
 
 
+def _server_json(url, payload, key=None, timeout=30):
+    """POST JSON to the user's own translation server and return the decoded answer."""
+    if not url.lower().startswith(("http://", "https://")):
+        raise OSError("the server address must start with http:// or https://")
+    headers = {"Content-Type": "application/json", "User-Agent": "ScreenTranslator"}
+    if key:
+        headers["Authorization"] = "Bearer " + key
+    req = urllib.request.Request(url, json.dumps(payload).encode("utf-8"), headers)
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return json.loads(resp.read())
+
+
+def _libre_code(code):
+    return {"zh-CN": "zh", "zh-TW": "zt"}.get(code, code.split("-")[0])
+
+
+def server_translate_group(server, texts, src, dst):
+    """Several lines through the user's own server (LibreTranslate, or an OpenAI-compatible one such as Ollama
+    or LM Studio). Returns one translation per line, or None if they don't come back 1:1."""
+    base = server["url"].rstrip("/")
+    lines = [" ".join(t.split()) for t in texts]
+    if server["kind"] == "libretranslate":
+        answer = _server_json(base + "/translate", {
+            "q": lines, "source": "auto" if src == "auto" else _libre_code(src), "target": _libre_code(dst),
+            "format": "text", "api_key": server.get("key", "")}, timeout=20)
+        out = answer.get("translatedText")
+        out = [out] if isinstance(out, str) else out
+    else:
+        prompt = (f"Translate each string in this JSON array into {language_name(dst)}. Answer with only a JSON array "
+                  f"of the same length, in the same order, nothing else.\n" + json.dumps(lines, ensure_ascii=False))
+        answer = _server_json(base + "/chat/completions", {
+            "model": server.get("model", ""), "temperature": 0, "stream": False,
+            "messages": [{"role": "user", "content": prompt}]}, server.get("key"), timeout=60)
+        content = answer["choices"][0]["message"]["content"]
+        start, end = content.find("["), content.rfind("]")
+        out = json.loads(content[start:end + 1])
+    if isinstance(out, list) and len(out) == len(texts) and all(isinstance(o, str) for o in out):
+        return out
+    return None
+
+
 class DiskCache:
     """Google's translations kept in a file, so text read again (today or next week) is not sent again.
     Only Google's: a translation from the small offline model should not outlive the moment Google is back."""
@@ -347,6 +389,9 @@ class Translator:
         self.google = False  # use Google Translate first, the offline engine is the fallback
         self._google_down = 0.0  # Google is not tried again before this moment
         self.disk = None  # a DiskCache, if translations are to be remembered
+        self.server = None  # {"kind", "url", "key", "model"}: the user's own server, tried after Google, before offline
+        self._server_down = 0.0
+        self._server_fails = 0
         self._fails = 0  # failures in a row
         self._limits = 0  # "too many requests" in a row
         self.missing_packs = set()  # Argos packs we needed but don't have
@@ -406,6 +451,27 @@ class Translator:
             self._fails = self._limits = 0
         return {i: out for i, out in done.items() if out}
 
+    def _server_many(self, items, src, dst):
+        """{index: translation} for the items the user's own server could do; nothing when it is down."""
+        if not self.server or time.monotonic() < self._server_down:
+            return {}
+        done = {}
+        for start in range(0, len(items), 8):
+            group = items[start:start + 8]
+            try:
+                lines = server_translate_group(self.server, [g[2] for g in group], src, dst)
+            except Exception:
+                lines = None
+            if lines is None:
+                break  # down, or answering nonsense: the rest goes offline rather than waiting on it again
+            done.update({g[0]: out for g, out in zip(group, lines) if out})
+        if done:
+            self._server_fails = 0
+        else:
+            self._server_fails += 1
+            self._server_down = time.monotonic() + min(60.0, 10.0 * self._server_fails)
+        return done
+
     def google_state(self):
         """Why Google is not being used right now: 'off', 'limited', 'unreachable', or 'ok' (it will be tried)."""
         if not self.google:
@@ -460,6 +526,12 @@ class Translator:
                 self.engine = "google"
         from_google = {i for i, out in outs.items() if out}
         rest = [item for item in todo if not outs.get(item[0])]
+        if rest and self.server:
+            more = self._server_many(rest, src, dst)
+            if more:
+                outs.update(more)
+                self.engine = "server"
+            rest = [item for item in rest if not outs.get(item[0])]
         if rest:
             engine = self.engine if len(rest) < len(todo) else "offline"
             try:
