@@ -46,4 +46,26 @@ class TextRulesTest {
         assertFalse(protectedText.contains("Hatsune"))
         assertEquals(text, TextRules.restore(protectedText, originals))
     }
+
+    @Test
+    fun rowsOfDotsReadAsLettersAreNotText() {
+        val en = Langs.sources.first { it.code == "en" }
+        assertFalse(TextRules.looksLikeSource("oooooooooooooooooooo oooooooooooooooooooo", en))
+        assertFalse(TextRules.looksLikeSource("oOo0o oo0oo OOOo0", en))
+        assertTrue(TextRules.looksLikeSource("The river trail is closed north of the old bridge", en))
+    }
+
+    @Test
+    fun aChosenTranslationReplacesTheTermAndKeepsTheSentence() {
+        val (p, originals) = TextRules.protect("Share one thread, so every live update waited.", listOf("thread = 執行緒", "live update=即時更新"), false)
+        assertFalse(p.contains("thread") || p.contains("live update"))
+        assertEquals(listOf("執行緒", "即時更新"), originals)
+    }
+
+    @Test
+    fun aChosenTranslationMatchesWholeWordsAndPluralsOnly() {
+        val (p, originals) = TextRules.protect("Threading and threads", listOf("thread=執行緒"), false)
+        assertEquals(listOf("執行緒"), originals)
+        assertTrue(p.contains("Threading"))
+    }
 }

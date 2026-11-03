@@ -114,6 +114,8 @@ class CaptureService : Service() {
     private var forceScan = false  // read the next frame even if the screen looks unchanged
     private var glossary = listOf<String>()
     private val cache = java.util.concurrent.ConcurrentHashMap<String, String>()
+    private var memory: TranslationMemory? = null  // translations remembered between runs
+    private var memoryScope = ""
     @Volatile private var shown = listOf<String>()
     private var luma = IntArray(0)
     private var lumaCols = 0
@@ -156,6 +158,8 @@ class CaptureService : Service() {
         src = prefs.sourceLang
         tgt = prefs.targetLang
         glossary = prefs.glossary.lines().map { it.trim() }.filter { it.isNotEmpty() }
+        memory = if (prefs.rememberTranslations) TranslationMemory(TranslationMemory.fileIn(this)) else null
+        memoryScope = "${src.code}|${GoogleTranslate.code(tgt)}|${glossary.sorted().hashCode()}"  // these change what comes out
         val hasProjection = intent.hasExtra(EXTRA_DATA)
         // Recording what the phone plays is microphone use too: without this type Android records only silence once
         // the app is in the background (that is, whenever you are watching something else).
@@ -791,12 +795,12 @@ class CaptureService : Service() {
 
     /** Translations of several blocks: Google takes them in one request; whatever it can't do goes offline one by one. */
     private fun translateMany(texts: List<String>): List<String?> {
-        val todo = texts.filter { cache[it] == null }
+        val todo = texts.filter { cache[it] == null && recall(it) == null }
         if (prefs.useGoogle && todo.size > 1) {
             val prepared = todo.map { it to TextRules.protect(it, glossary, src.script == Script.LATIN) }
                 .filter { (_, p) -> !TextRules.onlyPlaceholders(p.first) }
             GoogleTranslate.translateMany(prepared.map { it.second.first }, tgt).forEachIndexed { i, out ->
-                if (out != null) finish(prepared[i].first, out, prepared[i].second.second)
+                if (out != null) finish(prepared[i].first, out, prepared[i].second.second, fromGoogle = true)
             }
         }
         return texts.map { translate(it) }  // cached by now, or done on its own
@@ -804,28 +808,34 @@ class CaptureService : Service() {
 
     private fun translate(text: String): String? {
         cache[text]?.let { return it.ifEmpty { null } }
+        recall(text)?.let { return it }
         val (protectedText, originals) = TextRules.protect(text, glossary, src.script == Script.LATIN)
         if (TextRules.onlyPlaceholders(protectedText)) {
             cache[text] = ""
             return null
         }
-        val out = (if (prefs.useGoogle) GoogleTranslate.translate(protectedText, tgt) else null) ?: try {
+        val google = if (prefs.useGoogle) GoogleTranslate.translate(protectedText, tgt) else null
+        val out = google ?: try {
             Tasks.await(translator!!.translate(protectedText), 20, TimeUnit.SECONDS)
         } catch (e: Exception) {
             Log.w(TAG, "translate failed: ${e.message}")
             return null  // e.g. the language data is not downloaded yet: don't cache
         }
-        return finish(text, out, originals)
+        return finish(text, out, originals, fromGoogle = google != null)
     }
 
+    /** A translation remembered from an earlier run, if there is one. */
+    private fun recall(text: String): String? = memory?.get(memoryScope, text)?.also { cache[text] = it }
+
     /** Puts the protected names back, checks the result and caches it. */
-    private fun finish(text: String, out: String, originals: List<String>): String? {
+    private fun finish(text: String, out: String, originals: List<String>, fromGoogle: Boolean): String? {
         var result = TextRules.restore(out, originals)
         if (tgt.traditional) result = hansHant?.transliterate(result) ?: result
         val wantsCjk = tgt.code == "zh" || tgt.code == "ja" || tgt.code == "ko"
         if (result.isEmpty() || result.equals(text, ignoreCase = true) ||
             (wantsCjk && result.none { TextRules.isCjk(it) })) result = ""
         cache[text] = result
+        if (fromGoogle && result.isNotEmpty()) memory?.put(memoryScope, text, result)
         return result.ifEmpty { null }
     }
 

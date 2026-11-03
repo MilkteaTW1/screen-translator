@@ -26,6 +26,11 @@ class Prefs(context: Context) {
         get() = sp.getBoolean("useGoogle", true)
         set(v) = sp.edit().putBoolean("useGoogle", v).apply()
 
+    /** Keep Google's translations on the phone, so the same text is not sent again. */
+    var rememberTranslations: Boolean
+        get() = sp.getBoolean("rememberTranslations", true)
+        set(v) = sp.edit().putBoolean("rememberTranslations", v).apply()
+
     var screenText: Boolean
         get() = sp.getBoolean("screenText", true)
         set(v) = sp.edit().putBoolean("screenText", v).apply()

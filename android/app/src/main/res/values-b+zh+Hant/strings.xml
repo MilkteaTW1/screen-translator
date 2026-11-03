@@ -5,7 +5,8 @@
     <string name="translate_to">翻譯成</string>
     <string name="refresh_interval">刷新間隔(秒)</string>
     <string name="skip_names">略過人名與單字標籤</string>
-    <string name="glossary_label">不要翻譯這些(一行一個)</string>
+    <string name="glossary_label">不要翻譯這些(一行一個),或指定譯法:thread = 執行緒</string>
+    <string name="remember_translations">把翻譯記在這支手機,相同文字不再重新送出(關閉時會刪除)</string>
     <string name="use_google">優先使用 Google 翻譯(文字會傳送給 Google,離線翻譯當備援)</string>
     <string name="what_to_translate">要翻譯什麼</string>
     <string name="screen_text">螢幕上的文字</string>
