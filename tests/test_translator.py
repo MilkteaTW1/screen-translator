@@ -306,3 +306,59 @@ def test_a_damaged_cache_file_only_loses_the_damaged_line_and_clear_deletes_it(t
     assert again.get("Hello", "en", "zh-TW", 1) == "你好"
     again.clear()
     assert not path.exists() and again.get("Hello", "en", "zh-TW", 1) is None
+
+
+def _server_tr(monkeypatch, answer, kind="libretranslate"):
+    import screen_translator.translator as t
+    tr = t.Translator()
+    tr.google = False
+    tr.server = {"kind": kind, "url": "http://localhost:5000", "key": "", "model": "m"}
+    monkeypatch.setattr(t, "_server_json", answer)
+    monkeypatch.setattr(tr, "_argos_many", lambda texts, *a: [None] * len(texts))
+    return t, tr
+
+
+def test_own_libretranslate_server_is_used_when_google_is_off(monkeypatch):
+    sent = []
+
+    def answer(url, payload, key=None, timeout=30):
+        sent.append((url, payload))
+        return {"translatedText": ["你好,世界。" for _ in payload["q"]]}
+    t, tr = _server_tr(monkeypatch, answer)
+    assert tr.translate("Hello there, world.", "en", "zh-TW", "en-US", [], False, False) == "你好,世界。"
+    assert sent[0][0].endswith("/translate") and sent[0][1]["target"] == "zt" and tr.engine == "server"
+
+
+def test_own_openai_compatible_server_answers_a_json_array(monkeypatch):
+    def answer(url, payload, key=None, timeout=30):
+        assert url.endswith("/chat/completions")
+        return {"choices": [{"message": {"content": 'Sure:\n["你好,世界。"]'}}]}
+    t, tr = _server_tr(monkeypatch, answer, "openai")
+    assert tr.translate("Hello there, world.", "en", "zh-TW", "en-US", [], False, False) == "你好,世界。"
+
+
+def test_a_server_that_is_down_is_left_alone_for_a_while_and_offline_takes_over(monkeypatch):
+    calls = []
+
+    def down(url, payload, key=None, timeout=30):
+        calls.append(1)
+        raise OSError("refused")
+    t, tr = _server_tr(monkeypatch, down)
+    monkeypatch.setattr(tr, "_argos_many", lambda texts, *a: ["離線翻譯。"] * len(texts))
+    assert tr.translate("Hello there, world.", "en", "zh-TW", "en-US", [], False, False) == "離線翻譯。"
+    tr.translate("Another sentence here, friend.", "en", "zh-TW", "en-US", [], False, False)
+    assert len(calls) == 1
+
+
+def test_a_server_answer_with_the_wrong_number_of_lines_is_not_used(monkeypatch):
+    def answer(url, payload, key=None, timeout=30):
+        return {"translatedText": ["只有一行。"]}
+    t, tr = _server_tr(monkeypatch, answer)
+    assert t.server_translate_group(tr.server, ["One line here.", "Two lines here."], "en", "zh-TW") is None
+
+
+def test_the_server_address_must_be_http(monkeypatch):
+    import screen_translator.translator as t
+    import pytest
+    with pytest.raises(OSError):
+        t._server_json("file:///etc/passwd", {})
