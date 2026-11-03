@@ -96,6 +96,19 @@ def _iou(a, b):
     return inter / union if union else 0.0
 
 
+def _duplicate(a, b):
+    """Whether two tracks are the same text drawn twice: mostly on top of each other, or the same words side by side
+    within a couple of lines of each other."""
+    ra, rb = (a["x"], a["y"], a["w"], a["h"]), (b["x"], b["y"], b["w"], b["h"])
+    ix = max(0, min(ra[0] + ra[2], rb[0] + rb[2]) - max(ra[0], rb[0]))
+    iy = max(0, min(ra[1] + ra[3], rb[1] + rb[3]) - max(ra[1], rb[1]))
+    smaller = min(ra[2] * ra[3], rb[2] * rb[3])
+    if smaller and ix * iy / smaller > 0.3:
+        return True
+    near = abs(ra[1] - rb[1]) <= 2 * max(ra[3], rb[3]) and ix > 0
+    return near and difflib.SequenceMatcher(None, a["text"], b["text"]).ratio() >= 0.8
+
+
 def load_settings():
     try:
         return {**DEFAULTS, **json.loads(SETTINGS_PATH.read_text(encoding="utf-8"))}
@@ -464,8 +477,13 @@ class Worker(QObject):
                 if self.static and t["seen"] >= 2 and t["missed"] <= 1:
                     carried.append(t)
         # a carried block that a fresh one now sits on top of is the same text read again: one box is enough
-        carried = [t for t in carried if not any(
-            _iou((t["x"], t["y"], t["w"], t["h"]), (f["x"], f["y"], f["w"], f["h"])) > 0.5 for f in fresh)]
+        # (a scroll leaves it a few pixels off its fresh twin, so overlap alone is not enough: the same words close by
+        # count too, and two carried boxes on top of each other are one)
+        kept = []
+        for t in carried:
+            if not any(_duplicate(t, f) for f in [*fresh, *kept]):
+                kept.append(t)
+        carried = kept
         self.tracks = fresh + carried
 
         for t in fresh:  # already translated earlier: straight from the cache
