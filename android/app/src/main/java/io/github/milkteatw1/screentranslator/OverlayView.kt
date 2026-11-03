@@ -83,7 +83,7 @@ class OverlayView(context: Context) : View(context) {
 
     override fun onDraw(canvas: Canvas) {
         drawCaptions(canvas)
-        val carried = if (glide != 0f) glide * ((android.os.SystemClock.uptimeMillis() - boxesAt) / 1000f).coerceIn(0f, 0.25f) else 0f
+        val carried = if (glide != 0f) (glide * ((android.os.SystemClock.uptimeMillis() - boxesAt) / 1000f).coerceIn(0f, 0.12f)).coerceIn(-120f, 120f) else 0f
         canvas.save()
         canvas.translate(0f, carried)
         for (b in boxes) {

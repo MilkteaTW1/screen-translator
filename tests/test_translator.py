@@ -135,3 +135,16 @@ def test_sentences_that_mention_a_handle_or_use_capitals_are_still_source():
 def test_links_handles_counters_and_names_are_still_not_source():
     for text in FEED_NOISE:
         assert not looks_like_source(text, "en-US", 300, 40), text
+
+
+def test_a_chosen_translation_replaces_the_term_and_keeps_the_sentence():
+    text = "Whisper and translation used to share one thread, so every live update waited."
+    protected, originals = protect(text, ["thread = 執行緒", "live update=即時更新"], "en", False, False)
+    assert "thread" not in protected and "live update" not in protected.lower()
+    assert originals == ["執行緒", "即時更新"]
+    assert restore(protected.replace("share one", "共用一個"), originals).count("執行緒") == 1
+
+
+def test_a_chosen_translation_matches_whole_words_and_plurals_only():
+    protected, originals = protect("Threading and threads", ["thread=執行緒"], "en", False, False)
+    assert originals == ["執行緒"] and "Threading" in protected

@@ -73,7 +73,7 @@ object ScrollTracker {
         val cc = cur.shrinkRows(k)
         val still = difference(cp, cc, 0)
         if (still < 1.5) return 0
-        val limit = (cp.rows * 0.7).toInt()
+        val limit = (cp.rows * 0.6).toInt()  // a longer jump is more likely a mismatch than one scroll step
         var best = Double.MAX_VALUE
         var bestDy = 0
         for (d in -limit..limit) {

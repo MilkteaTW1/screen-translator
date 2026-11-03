@@ -18,7 +18,7 @@ from pathlib import Path
 import mss
 import numpy as np
 from PySide6.QtCore import QObject, Qt, QTimer, Signal
-from PySide6.QtGui import QAction
+from PySide6.QtGui import QAction, QIcon
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QFileDialog, QComboBox, QDoubleSpinBox, QFormLayout, QGroupBox, QHBoxLayout, QLabel,
     QLineEdit, QMenu, QMessageBox, QPlainTextEdit, QPushButton, QSystemTrayIcon, QTabWidget, QVBoxLayout, QWidget,
@@ -49,6 +49,8 @@ SCROLL_SETTLE = 0.35  # seconds the page must stay still after scrolling before 
 SCROLL_READ_EVERY = 0.4  # seconds between reads while the page keeps scrolling (new text keeps arriving)
 SCROLL_LEAD = 0.03  # seconds of display delay: while scrolling, boxes are drawn this far ahead on top of the capture delay
 TRANSLATE_THREADS = 3
+HIDDEN_MAX_STILL = 5.0  # seconds a box may stay up on the word that our own box hides, while the screen is still
+HIDDEN_MAX_MOVING = 1.5  # ... and while the screen keeps changing (what is under the box may be gone)
 MAX_VELOCITY = 4000.0  # px/s: faster than any real scroll is a measuring slip, not something to draw ahead with
 MAX_LEAD = 120  # most pixels boxes are drawn ahead of the last measured position
 POLL = 0.08  # seconds between cheap looks at the screen (grab + compare is ~30 ms); a scan starts when it changed
@@ -264,6 +266,10 @@ class Worker(QObject):
             diff = float(np.abs(small - prev)[both].mean()) if both.any() else 0.0
         self.static = diff is not None and diff < 2.0  # barely changed: not scrolling or playing video
         changed = diff is None or diff > 0.6
+        if self.static and self.velocity != (0.0, 0.0):  # the page has just stopped: stop carrying the boxes on at once
+            self.velocity = (0.0, 0.0)  # (they would overshoot, then jump back to where the text really is)
+            self.motion.emit(0.0, 0.0)
+            self.results.emit(self._snapshot(now))
         green = arr[:, :, 1]  # one channel is enough to follow shifting text
         scrolled = False
         if changed and self.tracks and self._prev_gray is not None and not self.static:
@@ -383,7 +389,7 @@ class Worker(QObject):
             # has moved on: the time since that picture, plus a little for the display. (The overlay carries the boxes
             # along from here until the next update.)
             since = time.monotonic() - self._last_follow if self._last_follow else 0.0
-            lead = SCROLL_LEAD + min(0.25, max(0.0, since))
+            lead = SCROLL_LEAD + min(0.12, max(0.0, since))
             ox += max(-MAX_LEAD, min(MAX_LEAD, int(round(self.velocity[0] * lead))))
             oy += max(-MAX_LEAD, min(MAX_LEAD, int(round(self.velocity[1] * lead))))
         items = [(x + ox, y + oy, w, h, None, lh) for x, y, w, h, lh in self._others]
@@ -448,10 +454,13 @@ class Worker(QObject):
                 if id(part) not in used:
                     used.add(id(part))
                     part["missed"] = 0
+                    part.pop("hid", None)
                     fresh.append(part)
                 continue
             if t:
                 used.add(id(t))
+                t.pop("hid", None)
+                t["moved"] = False
                 t["seen"] += 1
                 t["missed"] = 0
                 if t["text"] != b.text and difflib.SequenceMatcher(None, b.text, t["text"]).ratio() < 0.8:
@@ -468,14 +477,19 @@ class Worker(QObject):
         for t in self.tracks:
             if id(t) not in used:
                 if _visible(t) is not None and self._cover_share((t["x"], t["y"], t["w"], t["h"]), boxes) >= 0.6:
-                    carried.append(t)  # hidden under our own box: the scan cannot see it, but it is still there
+                    # hidden under our own box: the scan cannot see it, so it is assumed to be there, but only for a while:
+                    # nothing ever confirms it, and the text under a box that stays up forever may be long gone
+                    hid = t.setdefault("hid", time.monotonic())
+                    if time.monotonic() - hid <= (HIDDEN_MAX_STILL if self.static else HIDDEN_MAX_MOVING):
+                        carried.append(t)
                     continue
                 if t.get("followed"):
+                    t["moved"] = True
                     carried.append(t)  # its own pixels were just seen moving with the scroll: it is still there
                     continue
                 t["missed"] += 1
-                if self.static and t["seen"] >= 2 and t["missed"] <= 1:
-                    carried.append(t)
+                if self.static and t["seen"] >= 2 and t["missed"] <= 1 and not t.get("moved"):
+                    carried.append(t)  # (a box that rode along with a scroll gets no second chance: it is stale)
         # a carried block that a fresh one now sits on top of is the same text read again: one box is enough
         # (a scroll leaves it a few pixels off its fresh twin, so overlap alone is not enough: the same words close by
         # count too, and two carried boxes on top of each other are one)
@@ -1069,6 +1083,8 @@ def main():
     ensure_streams()
     i18n.load(load_settings()["ui_language"])
     app = QApplication(sys.argv)
+    app_icon = QIcon(str(Path(__file__).with_name("icon.png")))
+    app.setWindowIcon(app_icon)
     app.setQuitOnLastWindowClosed(False)
     langs = LANGUAGES
     overlay = Overlay(app.primaryScreen())
@@ -1092,7 +1108,7 @@ def main():
     threading.Thread(target=prewarm, args=(worker,), daemon=True).start()
     panel.check_for_updates()
 
-    tray = QSystemTrayIcon(app.style().standardIcon(app.style().StandardPixmap.SP_ComputerIcon), app)
+    tray = QSystemTrayIcon(app_icon, app)
     menu = QMenu()
     show = QAction(menu, triggered=panel.show)
     toggle = QAction(menu, triggered=panel.on_toggle)
