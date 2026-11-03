@@ -56,3 +56,14 @@ def test_a_block_hidden_under_our_own_box_goes_with_the_scroll_and_our_boxes_do_
     hidden = {**block(4, 100), "covered": True}
     got = tracking.follow([hidden], prev, cur, ignore=[cover])
     assert got == (0, -60) and hidden["y"] == block(4, 160)["y"] and hidden["followed"]
+
+
+def test_a_shift_that_does_not_match_the_text_moves_nothing():
+    # a page of identical lines: every offset looks alike, so a wrong shift must not drag the blocks away
+    rng = np.random.default_rng(1)
+    prev = rng.integers(0, 255, (540, 960), dtype=np.uint8)
+    cur = np.roll(prev, 300, axis=0)  # a 300 px jump: more than 0.5 of the screen is not one scroll step
+    t = block(8, 100)
+    y = t["y"]
+    assert tracking.follow([t], prev, cur) is None
+    assert t["y"] == y

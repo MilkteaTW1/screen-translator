@@ -114,7 +114,7 @@ class Overlay(QWidget):
         painted = []
         k = self.scale
         dt = min(0.25, time.monotonic() - self.items_time) if self.motion != (0.0, 0.0) else 0.0
-        gx, gy = self.motion[0] * dt, self.motion[1] * dt  # how far the page has moved since these boxes were placed
+        gx, gy = (max(-120.0, min(120.0, v * dt)) for v in self.motion)  # how far the page has moved since these boxes were placed
         srcs = [(QRectF((x + gx) / k, (y + gy) / k, w / k, h / k), text, lh / k) for x, y, w, h, text, lh in self.items]
         placed = []  # translation boxes already placed (logical pixels)
         for i, (src, text, lh) in enumerate(srcs):
