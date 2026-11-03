@@ -49,6 +49,8 @@ SCROLL_SETTLE = 0.35  # seconds the page must stay still after scrolling before 
 SCROLL_READ_EVERY = 0.4  # seconds between reads while the page keeps scrolling (new text keeps arriving)
 SCROLL_LEAD = 0.03  # seconds of display delay: while scrolling, boxes are drawn this far ahead on top of the capture delay
 TRANSLATE_THREADS = 3
+HIDDEN_MAX_STILL = 5.0  # seconds a box may stay up on the word that our own box hides, while the screen is still
+HIDDEN_MAX_MOVING = 1.5  # ... and while the screen keeps changing (what is under the box may be gone)
 MAX_VELOCITY = 4000.0  # px/s: faster than any real scroll is a measuring slip, not something to draw ahead with
 MAX_LEAD = 120  # most pixels boxes are drawn ahead of the last measured position
 POLL = 0.08  # seconds between cheap looks at the screen (grab + compare is ~30 ms); a scan starts when it changed
@@ -452,10 +454,12 @@ class Worker(QObject):
                 if id(part) not in used:
                     used.add(id(part))
                     part["missed"] = 0
+                    part.pop("hid", None)
                     fresh.append(part)
                 continue
             if t:
                 used.add(id(t))
+                t.pop("hid", None)
                 t["moved"] = False
                 t["seen"] += 1
                 t["missed"] = 0
@@ -473,7 +477,11 @@ class Worker(QObject):
         for t in self.tracks:
             if id(t) not in used:
                 if _visible(t) is not None and self._cover_share((t["x"], t["y"], t["w"], t["h"]), boxes) >= 0.6:
-                    carried.append(t)  # hidden under our own box: the scan cannot see it, but it is still there
+                    # hidden under our own box: the scan cannot see it, so it is assumed to be there, but only for a while:
+                    # nothing ever confirms it, and the text under a box that stays up forever may be long gone
+                    hid = t.setdefault("hid", time.monotonic())
+                    if time.monotonic() - hid <= (HIDDEN_MAX_STILL if self.static else HIDDEN_MAX_MOVING):
+                        carried.append(t)
                     continue
                 if t.get("followed"):
                     t["moved"] = True
