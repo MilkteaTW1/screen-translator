@@ -148,3 +148,161 @@ def test_a_chosen_translation_replaces_the_term_and_keeps_the_sentence():
 def test_a_chosen_translation_matches_whole_words_and_plurals_only():
     protected, originals = protect("Threading and threads", ["thread=執行緒"], "en", False, False)
     assert originals == ["執行緒"] and "Threading" in protected
+
+
+def test_rows_of_dots_read_as_letters_are_not_text():
+    from screen_translator.translator import looks_like_source
+    assert not looks_like_source("oooooooooooooooooooo oooooooooooooooooooo", "en-US")
+    assert not looks_like_source("oOo0o oo0oo OOOo0", "en-US")
+    assert looks_like_source("The river trail is closed north of the old bridge", "en-US")
+
+
+def _google_tr(monkeypatch, answer):
+    import screen_translator.translator as t
+    tr = t.Translator()
+    tr.google = True
+    monkeypatch.setattr(t, "google_translate", answer)
+    monkeypatch.setattr(tr, "_argos_many", lambda texts, *a: [None] * len(texts))
+    return t, tr
+
+
+def test_one_failed_request_costs_seconds_and_says_why(monkeypatch):
+    def down(*a):
+        raise OSError("timeout")
+    t, tr = _google_tr(monkeypatch, down)
+    tr.translate("Hello there, world.", "en", "zh-TW", "en-US", [], True, False)
+    assert tr.google_state() == "unreachable"
+    assert tr._google_down - t.time.monotonic() <= 5.0
+    tr._google_down = 0.0
+    assert tr.google_state() == "ok"  # the wait is over: Google will be tried, so the status must not say offline
+
+
+def test_too_many_requests_backs_off_step_by_step_and_a_success_resets_it(monkeypatch):
+    import screen_translator.translator as tmod
+
+    def limited(*a):
+        raise tmod.RateLimited("429")
+    t, tr = _google_tr(monkeypatch, limited)
+    tr.translate("Hello there, world.", "en", "zh-TW", "en-US", [], True, False)
+    assert tr.google_state() == "limited" and tr._google_down - t.time.monotonic() <= 60.0
+    tr._google_down = 0.0
+    tr.translate("Hello there, again.", "en", "zh-TW", "en-US", [], True, False)
+    assert 60.0 < tr._google_down - t.time.monotonic() <= 120.0
+    tr._google_down = 0.0
+    monkeypatch.setattr(t, "google_translate", lambda text, *a: "你好")
+    assert tr.translate("Hello once more.", "en", "zh-TW", "en-US", [], True, False) == "你好"
+    assert tr._limits == 0 and tr.google_state() == "ok"
+
+
+def test_a_redirect_to_the_unusual_traffic_page_is_a_refusal_not_a_lost_connection(monkeypatch):
+    import screen_translator.translator as t
+
+    class Answer:
+        status = 302
+
+        def read(self):
+            return b""
+
+    class Conn:
+        made = 0
+
+        def __init__(self, *a, **k):
+            Conn.made += 1
+
+        def request(self, *a):
+            pass
+
+        def getresponse(self):
+            return Answer()
+
+        def close(self):
+            pass
+    monkeypatch.setattr(t.http.client, "HTTPSConnection", Conn)
+    t._google_conn.conn = None
+    with __import__("pytest").raises(t.RateLimited):
+        t.google_translate("Hello there", "en", "zh-TW")
+    assert Conn.made == 1  # not asked twice
+    tr = t.Translator()
+    tr.google = True
+    monkeypatch.setattr(tr, "_argos_many", lambda texts, *a: [None] * len(texts))
+    tr.translate_many(["Hello there, world.", "Another sentence here."], "en", "zh-TW", "en-US", [], False, False)
+    assert tr.google_state() == "limited"
+
+
+def test_while_refused_only_one_request_finds_out_if_google_answers_again(monkeypatch):
+    import screen_translator.translator as t
+    calls = []
+
+    def refused(texts, *a):
+        calls.append(texts)
+        raise t.RateLimited("302")
+    monkeypatch.setattr(t, "google_translate_group", refused)
+    tr = t.Translator()
+    tr.google = True
+    tr._limits = 1
+    monkeypatch.setattr(tr, "_argos_many", lambda texts, *a: [None] * len(texts))
+    texts = [f"This is sentence number {i} about the river." for i in range(40)]
+    tr.translate_many(texts, "en", "zh-TW", "en-US", [], False, False)
+    assert len(calls) == 1
+
+
+def _cached_tr(monkeypatch, tmp_path, answer):
+    import screen_translator.translator as t
+    tr = t.Translator()
+    tr.google = True
+    tr.disk = t.DiskCache(tmp_path / "translations.jsonl")
+    monkeypatch.setattr(t, "google_translate", answer)
+    return t, tr
+
+
+def test_text_read_again_after_a_restart_is_not_sent_again(monkeypatch, tmp_path):
+    sent = []
+
+    def google(text, *a):
+        sent.append(text)
+        return "你好,世界。"
+    t, tr = _cached_tr(monkeypatch, tmp_path, google)
+    assert tr.translate("Hello there, world.", "en", "zh-TW", "en-US", [], False, False) == "你好,世界。"
+    assert len(sent) == 1
+    fresh = t.Translator()  # the app started again
+    fresh.google = True
+    fresh.disk = t.DiskCache(tmp_path / "translations.jsonl")
+    assert fresh.translate("Hello  there,\nworld.", "en", "zh-TW", "en-US", [], False, False) == "你好,世界。"
+    assert len(sent) == 1
+
+
+def test_a_different_glossary_or_target_is_translated_again(monkeypatch, tmp_path):
+    sent = []
+
+    def google(text, *a):
+        sent.append(text)
+        return "你好,世界。"
+    t, tr = _cached_tr(monkeypatch, tmp_path, google)
+    tr.translate("Hello there, world.", "en", "zh-TW", "en-US", [], False, False)
+    tr.clear()
+    tr.translate("Hello there, world.", "en", "zh-TW", "en-US", ["world = 世間"], False, False)
+    tr.clear()
+    tr.translate("Hello there, world.", "en", "ja", "en-US", [], False, False)
+    assert len(sent) == 3
+
+
+def test_offline_translations_are_not_remembered_on_disk(monkeypatch, tmp_path):
+    def down(*a):
+        raise OSError("no internet")
+    t, tr = _cached_tr(monkeypatch, tmp_path, down)
+    monkeypatch.setattr(tr, "_argos_many", lambda texts, *a: ["離線翻譯。"] * len(texts))
+    assert tr.translate("Hello there, world.", "en", "zh-TW", "en-US", [], False, False) == "離線翻譯。"
+    assert not (tmp_path / "translations.jsonl").exists()
+
+
+def test_a_damaged_cache_file_only_loses_the_damaged_line_and_clear_deletes_it(tmp_path):
+    import screen_translator.translator as t
+    path = tmp_path / "translations.jsonl"
+    c = t.DiskCache(path)
+    c.put("Hello", "en", "zh-TW", 1, "你好")
+    with path.open("a", encoding="utf-8") as f:
+        f.write('["en|cut off')
+    again = t.DiskCache(path)
+    assert again.get("Hello", "en", "zh-TW", 1) == "你好"
+    again.clear()
+    assert not path.exists() and again.get("Hello", "en", "zh-TW", 1) is None

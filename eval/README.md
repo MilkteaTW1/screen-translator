@@ -12,7 +12,8 @@ translation boxes can be measured instead of judged from one screenshot.
 - Reading: wrong characters, lines missed, things read that are not text, time per picture.
 - Scroll: how often the measured shift is right.
 - Boxes: the real Worker and Overlay on a scroll and on text that vanishes: boxes for text no longer on screen (`stale`), boxes
-  far from their text (`misplaced`), boxes on top of each other (`overlaps`), distance from the text while moving (`err_moving_px`).
+  far from their text (`misplaced`), boxes on top of each other (`overlaps`), distance from the text while moving (`err_moving_px`),
+  and translations that come and go on a still page while something else on the screen moves (`flicker`).
 
 **What it does not show**
 

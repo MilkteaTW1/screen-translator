@@ -5,7 +5,9 @@ import re
 import threading
 import time
 import urllib.parse
+import zlib
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 
 from . import packs
 
@@ -114,6 +116,9 @@ def looks_like_source(text, ocr_tag, w=None, h=None, skip_names=True):
     if len(letters) < 2:
         return False
     chars = "".join(text.split())
+    alnum = [c.lower() for c in chars if c.isalnum()]
+    if len(alnum) >= 6 and len(set(alnum)) <= 3:
+        return False  # a row of dots or circles reads as "oooooooo": a picture, not text
     noise = [c for c in chars if not c.isalnum() and c not in ALLOWED_SYMBOLS]
     if noise and len(noise) / len(chars) >= 0.15:
         return False  # icons and artwork come out of OCR as strings of odd symbols
@@ -223,7 +228,11 @@ def language_name(code):
 
 
 class RateLimited(OSError):
-    """Google answered "too many requests"."""
+    """Google refuses for now: "too many requests", or a redirect to its "unusual traffic" page."""
+
+
+REFUSED = {301, 302, 303, 307, 403, 429, 503}  # the network is fine, Google does not want to answer this machine
+_GOOGLE_POOL = ThreadPoolExecutor(max_workers=2)  # few requests at a time, on threads that keep their connection open
 
 
 _google_conn = threading.local()  # one kept-open connection per thread: no new TLS handshake for every request
@@ -243,11 +252,15 @@ def google_translate(text, src, dst, timeout=8):
             conn.request("POST", path, body, headers)
             resp = conn.getresponse()
             raw = resp.read()
-            if resp.status == 429:
-                raise RateLimited("Google answered 429 (too many requests)")
+            if resp.status in REFUSED:
+                raise RateLimited(f"Google refused with {resp.status}")
             if resp.status != 200:
                 raise OSError(f"Google answered {resp.status}")
             break
+        except RateLimited:
+            conn.close()
+            _google_conn.conn = None
+            raise  # asking again at once only makes it worse
         except Exception:
             conn.close()
             _google_conn.conn = None  # a stale kept-open connection: retry once on a fresh one
@@ -264,14 +277,78 @@ def google_translate_group(texts, src, dst):
     return lines if len(lines) == len(texts) else None
 
 
+class DiskCache:
+    """Google's translations kept in a file, so text read again (today or next week) is not sent again.
+    Only Google's: a translation from the small offline model should not outlive the moment Google is back."""
+    MAX = 50000  # entries; past this the oldest are dropped
+    KEEP = 30000
+
+    def __init__(self, path):
+        self.path = Path(path)
+        self._items = None  # loaded on first use
+        self._lock = threading.Lock()
+
+    @staticmethod
+    def _key(text, src, dst, sig):
+        return f"{src}|{dst}|{sig}|{' '.join(text.split())}"  # OCR's line breaks and spacing do not make it other text
+
+    def _load(self):
+        if self._items is not None:
+            return
+        self._items = {}
+        try:
+            with self.path.open(encoding="utf-8") as f:
+                for line in f:
+                    try:
+                        key, value = json.loads(line)
+                        self._items[key] = value
+                    except (ValueError, TypeError):
+                        continue  # a line cut off by a crash: the rest is still good
+        except OSError:
+            pass
+
+    def get(self, text, src, dst, sig):
+        with self._lock:
+            self._load()
+            return self._items.get(self._key(text, src, dst, sig))
+
+    def put(self, text, src, dst, sig, translation):
+        key = self._key(text, src, dst, sig)
+        with self._lock:
+            self._load()
+            self._items[key] = translation
+            try:
+                self.path.parent.mkdir(parents=True, exist_ok=True)
+                if len(self._items) > self.MAX:
+                    self._items = dict(list(self._items.items())[-self.KEEP:])
+                    lines = "".join(json.dumps(item, ensure_ascii=False) + "\n" for item in self._items.items())
+                    self.path.write_text(lines, encoding="utf-8")
+                else:
+                    with self.path.open("a", encoding="utf-8") as f:
+                        f.write(json.dumps([key, translation], ensure_ascii=False) + "\n")
+            except OSError:
+                pass  # no room or no rights: it still works, just without remembering
+
+    def clear(self):
+        with self._lock:
+            self._items = {}
+            try:
+                self.path.unlink(missing_ok=True)
+            except OSError:
+                pass
+
+
 class Translator:
-    RETRY_AFTER = 30.0  # seconds without trying Google again after it failed (offline...)
-    RATE_LIMITED = 600.0  # after "too many requests"
+    RETRY_AFTER = 30.0  # longest wait before trying Google again after it failed; one slow answer costs only a few seconds
+    RATE_LIMITED = 600.0  # longest wait after "too many requests", reached only if Google keeps saying it
 
     def __init__(self):
         self.cache = {}
         self.google = False  # use Google Translate first, the offline engine is the fallback
-        self._google_down = 0.0  # time of the last failure
+        self._google_down = 0.0  # Google is not tried again before this moment
+        self.disk = None  # a DiskCache, if translations are to be remembered
+        self._fails = 0  # failures in a row
+        self._limits = 0  # "too many requests" in a row
         self.missing_packs = set()  # Argos packs we needed but don't have
         self.engine = None  # engine used for the most recent translation (None: nothing translated yet)
 
@@ -301,6 +378,8 @@ class Translator:
             size += len(item[2])
         if group:
             groups.append(group)
+        if self._limits:
+            groups = groups[:1]  # just found out whether Google answers again: one request, not a screenful
 
         limited = []
 
@@ -316,13 +395,24 @@ class Translator:
             except Exception:
                 return [(g[0], None) for g in group]
 
-        with ThreadPoolExecutor(max_workers=6) as pool:
-            done = dict(pair for part in pool.map(one, groups) for pair in part)
+        done = dict(pair for part in _GOOGLE_POOL.map(one, groups) for pair in part)
         if limited:
-            self._google_down = time.monotonic() + self.RATE_LIMITED
+            self._limits += 1
+            self._google_down = time.monotonic() + min(self.RATE_LIMITED, 60.0 * 2 ** (self._limits - 1))
         elif items and not any(done.values()):
-            self._google_down = time.monotonic() + self.RETRY_AFTER
+            self._fails += 1
+            self._google_down = time.monotonic() + min(self.RETRY_AFTER, 5.0 * self._fails)
+        elif any(done.values()):
+            self._fails = self._limits = 0
         return {i: out for i, out in done.items() if out}
+
+    def google_state(self):
+        """Why Google is not being used right now: 'off', 'limited', 'unreachable', or 'ok' (it will be tried)."""
+        if not self.google:
+            return "off"
+        if time.monotonic() >= self._google_down:
+            return "ok"
+        return "limited" if self._limits else "unreachable"
 
     def clear(self):
         self.cache.clear()
@@ -348,10 +438,15 @@ class Translator:
         than one call each (a screen full of text: 2.0 s one by one, 0.8 s batched)."""
         results = [None] * len(texts)
         todo = []  # (index, text, protected text, protected originals)
+        sig = zlib.crc32(repr((sorted(glossary), auto, keep_katakana)).encode("utf-8"))  # these change what comes out
         for i, text in enumerate(texts):
             key = (text, src, dst)
             if key in self.cache:
                 results[i] = self.cache[key]
+                continue
+            stored = self.disk.get(text, src, dst, sig) if self.disk else None
+            if stored:
+                results[i] = self.cache[key] = stored
                 continue
             protected, originals = protect(text, glossary, ocr_tag.split("-")[0].lower(), auto, keep_katakana)
             if not any(c.isalpha() for c in PLACEHOLDER_RE.sub("", protected)):
@@ -363,6 +458,7 @@ class Translator:
             outs = self._google_many(todo, src, dst)
             if outs:
                 self.engine = "google"
+        from_google = {i for i, out in outs.items() if out}
         rest = [item for item in todo if not outs.get(item[0])]
         if rest:
             engine = self.engine if len(rest) < len(todo) else "offline"
@@ -382,4 +478,6 @@ class Translator:
             except Exception:
                 continue
             self.cache[(text, src, dst)] = results[i]
+            if self.disk and results[i] and i in from_google:
+                self.disk.put(text, src, dst, sig, results[i])
         return results

@@ -9,7 +9,7 @@ class FakeOcr:
     def __init__(self, tag, lines):
         self.tag, self.joiner, self._lines = tag, "" if tag.split("-")[0] in ("ja", "zh") else " ", lines
 
-    def recognize(self, bgra, w, h):
+    def read_prepared(self, data, w, h, scale):
         return [Line(x, y, lw, lh, text, 0, self.tag, self.joiner) for x, y, lw, lh, text in self._lines]
 
 
@@ -20,7 +20,7 @@ CHINESE = FakeOcr("zh-Hant-TW", [(10, 110, 380, 20, "這個程式可以直接翻
 
 
 def test_each_place_keeps_the_reading_in_its_own_script():
-    lines = AutoRecognizer([ENGLISH, JAPANESE, CHINESE]).recognize(b"", 500, 200)
+    lines = AutoRecognizer([ENGLISH, JAPANESE, CHINESE]).recognize(bytes(500 * 200 * 4), 500, 200)
     assert [(l.tag, l.text[:8]) for l in lines] == [
         ("en-US", "The new "), ("ja", "このアプリは画面"), ("zh-Hant-TW", "這個程式可以直接")]
 
@@ -43,7 +43,7 @@ def test_the_worker_translates_each_block_from_its_own_language_and_skips_the_ta
     recognizer = AutoRecognizer([ENGLISH, JAPANESE, CHINESE])
 
     class Shot:
-        bgra, width, height = b"", 500, 200
+        bgra, width, height = bytes(500 * 200 * 4), 500, 200
     for _ in range(2):  # a block is shown once seen twice
         items = worker._process(recognizer, Shot, worker.settings)
         worker.dirty = False
