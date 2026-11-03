@@ -67,3 +67,12 @@ def test_a_shift_that_does_not_match_the_text_moves_nothing():
     y = t["y"]
     assert tracking.follow([t], prev, cur) is None
     assert t["y"] == y
+
+
+def test_a_carried_box_next_to_its_fresh_twin_is_a_duplicate():
+    from screen_translator.app import _duplicate
+    fresh = {"x": 40, "y": 100, "w": 300, "h": 30, "text": "How do you automatically tag 2,000 books?"}
+    carried = {"x": 44, "y": 112, "w": 300, "h": 30, "text": "How do you automatically tag 2,000 books"}
+    other = {"x": 40, "y": 400, "w": 300, "h": 30, "text": "Something else entirely"}
+    assert _duplicate(carried, fresh)
+    assert not _duplicate(other, fresh)
