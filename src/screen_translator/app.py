@@ -30,14 +30,15 @@ from .speech import MODELS, SpeechWorker, download_model, ensure_streams, find_m
 from . import __version__, i18n, packs, updater
 from .i18n import t
 from .translator import (
-    LANGUAGES, Translator, argos_code, install_pack, looks_like_source, missing_pairs, needed_pairs, ocr_tag_to_code,
+    DiskCache, LANGUAGES, Translator, argos_code, install_pack, looks_like_source, missing_pairs, needed_pairs, ocr_tag_to_code,
 )
 
 SETTINGS_PATH = Path(os.environ.get("APPDATA", Path.home())) / "ScreenTranslator" / "settings.json"
+CACHE_PATH = SETTINGS_PATH.with_name("translations.jsonl")
 DEFAULTS = {
     "source": "en-US", "target": "zh-TW", "interval": 1.0,
     "auto_proper": True, "keep_katakana": False, "glossary": "",
-    "hide_from_capture": True, "skip_names": True,
+    "hide_from_capture": True, "skip_names": True, "disk_cache": True,
     "autostart": False, "start_on_launch": False,
     "speech_enabled": False, "speech_source": "system", "speech_model": "base", "speech_lang": "auto",
     "use_google": True,
@@ -188,6 +189,11 @@ class Worker(QObject):
 
     def _use_engine(self, s):
         self.translator.google = bool(s.get("use_google", True))
+        if s.get("disk_cache", True):
+            self.translator.disk = self.translator.disk or DiskCache(CACHE_PATH)
+        else:
+            DiskCache(CACHE_PATH).clear()  # turned off means forgotten, not just unused
+            self.translator.disk = None
 
     def start(self):
         if self.running:
@@ -695,6 +701,7 @@ class Panel(QWidget):
         self.kata = self._check("keep_katakana", s["keep_katakana"])
         self.hide_capture = self._check("hide_capture", s["hide_from_capture"])
         self.skip_names = self._check("skip_names", s["skip_names"])
+        self.disk_cache = self._check("disk_cache", s["disk_cache"])
         self.autostart = self._check("autostart", s["autostart"])
         self.start_on_launch = self._check("start_on_launch", s["start_on_launch"])
         self.google = self._check("google_enable", s["use_google"])
@@ -744,6 +751,7 @@ class Panel(QWidget):
         lay.addLayout(form)
         lay.addWidget(self.hide_capture)
         lay.addWidget(self.skip_names)
+        lay.addWidget(self.disk_cache)
         lay.addStretch(1)
         self._tab(translate, "tab_translate")
 
@@ -818,6 +826,7 @@ class Panel(QWidget):
         self.interval.valueChanged.connect(self.apply)
         self.hide_capture.toggled.connect(self.apply)
         self.skip_names.toggled.connect(self.apply)
+        self.disk_cache.toggled.connect(self.apply)
         self.auto.toggled.connect(self.apply)
         self.kata.toggled.connect(self.apply)
         self.glossary.textChanged.connect(self.apply)
@@ -916,6 +925,7 @@ class Panel(QWidget):
             "keep_katakana": self.kata.isChecked(), "glossary": self.glossary.toPlainText(),
             "hide_from_capture": self.hide_capture.isChecked(),
             "skip_names": self.skip_names.isChecked(),
+            "disk_cache": self.disk_cache.isChecked(),
             "use_google": self.google.isChecked(),
             "autostart": self.autostart.isChecked(), "start_on_launch": self.start_on_launch.isChecked(),
             "speech_enabled": self.speech_enabled.isChecked(), "speech_source": self.speech_source.currentData(),

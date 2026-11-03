@@ -244,3 +244,65 @@ def test_while_refused_only_one_request_finds_out_if_google_answers_again(monkey
     texts = [f"This is sentence number {i} about the river." for i in range(40)]
     tr.translate_many(texts, "en", "zh-TW", "en-US", [], False, False)
     assert len(calls) == 1
+
+
+def _cached_tr(monkeypatch, tmp_path, answer):
+    import screen_translator.translator as t
+    tr = t.Translator()
+    tr.google = True
+    tr.disk = t.DiskCache(tmp_path / "translations.jsonl")
+    monkeypatch.setattr(t, "google_translate", answer)
+    return t, tr
+
+
+def test_text_read_again_after_a_restart_is_not_sent_again(monkeypatch, tmp_path):
+    sent = []
+
+    def google(text, *a):
+        sent.append(text)
+        return "你好,世界。"
+    t, tr = _cached_tr(monkeypatch, tmp_path, google)
+    assert tr.translate("Hello there, world.", "en", "zh-TW", "en-US", [], False, False) == "你好,世界。"
+    assert len(sent) == 1
+    fresh = t.Translator()  # the app started again
+    fresh.google = True
+    fresh.disk = t.DiskCache(tmp_path / "translations.jsonl")
+    assert fresh.translate("Hello  there,\nworld.", "en", "zh-TW", "en-US", [], False, False) == "你好,世界。"
+    assert len(sent) == 1
+
+
+def test_a_different_glossary_or_target_is_translated_again(monkeypatch, tmp_path):
+    sent = []
+
+    def google(text, *a):
+        sent.append(text)
+        return "你好,世界。"
+    t, tr = _cached_tr(monkeypatch, tmp_path, google)
+    tr.translate("Hello there, world.", "en", "zh-TW", "en-US", [], False, False)
+    tr.clear()
+    tr.translate("Hello there, world.", "en", "zh-TW", "en-US", ["world = 世間"], False, False)
+    tr.clear()
+    tr.translate("Hello there, world.", "en", "ja", "en-US", [], False, False)
+    assert len(sent) == 3
+
+
+def test_offline_translations_are_not_remembered_on_disk(monkeypatch, tmp_path):
+    def down(*a):
+        raise OSError("no internet")
+    t, tr = _cached_tr(monkeypatch, tmp_path, down)
+    monkeypatch.setattr(tr, "_argos_many", lambda texts, *a: ["離線翻譯。"] * len(texts))
+    assert tr.translate("Hello there, world.", "en", "zh-TW", "en-US", [], False, False) == "離線翻譯。"
+    assert not (tmp_path / "translations.jsonl").exists()
+
+
+def test_a_damaged_cache_file_only_loses_the_damaged_line_and_clear_deletes_it(tmp_path):
+    import screen_translator.translator as t
+    path = tmp_path / "translations.jsonl"
+    c = t.DiskCache(path)
+    c.put("Hello", "en", "zh-TW", 1, "你好")
+    with path.open("a", encoding="utf-8") as f:
+        f.write('["en|cut off')
+    again = t.DiskCache(path)
+    assert again.get("Hello", "en", "zh-TW", 1) == "你好"
+    again.clear()
+    assert not path.exists() and again.get("Hello", "en", "zh-TW", 1) is None

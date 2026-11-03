@@ -23,3 +23,10 @@ def no_blocking_dialogs(monkeypatch):
     """A machine without the language packs asks to download them in a modal box; nobody is there to click it."""
     from PySide6.QtWidgets import QMessageBox
     monkeypatch.setattr(QMessageBox, "exec", lambda self: 0)
+
+
+@pytest.fixture(autouse=True)
+def no_real_translation_memory(monkeypatch, tmp_path):
+    """Tests never read or write the translations remembered on this machine."""
+    from screen_translator import app
+    monkeypatch.setattr(app, "CACHE_PATH", tmp_path / "translations.jsonl")

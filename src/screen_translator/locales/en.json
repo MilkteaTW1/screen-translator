@@ -9,6 +9,7 @@
   "refresh_interval": "Refresh interval",
   "hide_capture": "Hide translations from screenshots",
   "skip_names": "Skip names and one-word labels (e.g. Bill Gates, Premium)",
+  "disk_cache": "Remember translations on this computer, so the same text is not sent again (plain text; turning this off deletes them)",
   "speech_enable": "Translate speech: list what is heard at the bottom of the screen",
   "audio_from": "Audio from",
   "audio_system": "System audio (what the computer plays)",
