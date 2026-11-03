@@ -114,6 +114,9 @@ def looks_like_source(text, ocr_tag, w=None, h=None, skip_names=True):
     if len(letters) < 2:
         return False
     chars = "".join(text.split())
+    alnum = [c.lower() for c in chars if c.isalnum()]
+    if len(alnum) >= 6 and len(set(alnum)) <= 3:
+        return False  # a row of dots or circles reads as "oooooooo": a picture, not text
     noise = [c for c in chars if not c.isalnum() and c not in ALLOWED_SYMBOLS]
     if noise and len(noise) / len(chars) >= 0.15:
         return False  # icons and artwork come out of OCR as strings of odd symbols

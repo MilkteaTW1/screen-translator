@@ -148,3 +148,10 @@ def test_a_chosen_translation_replaces_the_term_and_keeps_the_sentence():
 def test_a_chosen_translation_matches_whole_words_and_plurals_only():
     protected, originals = protect("Threading and threads", ["thread=執行緒"], "en", False, False)
     assert originals == ["執行緒"] and "Threading" in protected
+
+
+def test_rows_of_dots_read_as_letters_are_not_text():
+    from screen_translator.translator import looks_like_source
+    assert not looks_like_source("oooooooooooooooooooo oooooooooooooooooooo", "en-US")
+    assert not looks_like_source("oOo0o oo0oo OOOo0", "en-US")
+    assert looks_like_source("The river trail is closed north of the old bridge", "en-US")

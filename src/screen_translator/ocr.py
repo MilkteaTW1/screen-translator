@@ -3,6 +3,9 @@ import asyncio
 import re
 from dataclasses import dataclass
 
+import numpy as np
+from PySide6.QtCore import Qt  # Qt before winrt, or the process crashes
+from PySide6.QtGui import QImage
 from winrt.windows.globalization import Language
 from winrt.windows.graphics.imaging import BitmapPixelFormat, SoftwareBitmap
 from winrt.windows.media.ocr import OcrEngine
@@ -12,6 +15,9 @@ NO_SPACE_LANGS = {"ja", "zh", "th"}
 LONE_WORDS = set("aAI&0123456789")  # one-character tokens that are real words or numbers
 SENTENCE_END =(".", "!", "?", ":", ";", "。", "！", "？", "：")
 KATAKANA_HYPHEN_RE =re.compile(r"(?<=[ァ-ヺ])[-‐‑–—―](?![A-Za-z0-9])")
+UPSCALE = 2.0  # small text is read far better from an enlarged picture (eval/: 2.15% wrong characters down to 0.38%)
+UPSCALE_MAX_SIDE = 3840  # ... but not past this size: a big screen has big text, and the time grows with the pixels
+DARK_BELOW = 110  # mean brightness under which a picture is read inverted: OCR does better on dark text on light
 
 
 @dataclass
@@ -54,6 +60,21 @@ def merge_paragraphs(lines, joiner=None, max_lines=12):
     return merged
 
 
+def prepare(bgra, w, h):
+    """The picture the OCR reads: (bytes, width, height, scale). Dark pictures are inverted and small ones enlarged."""
+    a = np.frombuffer(bgra, np.uint8).reshape(h, w, 4)
+    if a[::8, ::8, :3].mean() < DARK_BELOW:
+        a = a.copy()
+        a[:, :, :3] = 255 - a[:, :, :3]
+    scale = min(UPSCALE, UPSCALE_MAX_SIDE / max(w, h))
+    if scale < 1.2:
+        return a.tobytes(), w, h, 1.0
+    width, height = round(w * scale), round(h * scale)
+    data = a.tobytes()  # QImage only borrows it
+    big = QImage(data, w, h, w * 4, QImage.Format_RGB32).scaled(width, height, Qt.IgnoreAspectRatio, Qt.SmoothTransformation)
+    return bytes(big.constBits())[:width * height * 4], width, height, width / w
+
+
 def available_languages():
     """[(tag, display_name)] of OCR languages installed in Windows."""
     return [(l.language_tag, l.display_name) for l in OcrEngine.available_recognizer_languages]
@@ -76,7 +97,10 @@ class Recognizer:
         return await self.engine.recognize_async(bitmap)
 
     def recognize(self, bgra, w, h):
-        result = asyncio.run(self._run(bytes(bgra), w, h))
+        return self.read_prepared(*prepare(bytes(bgra), w, h))
+
+    def read_prepared(self, data, w, h, scale):
+        result = asyncio.run(self._run(data, w, h))
         lines = []
         for line in result.lines:
             words = list(line.words)
@@ -92,7 +116,7 @@ class Recognizer:
                 text = KATAKANA_HYPHEN_RE.sub("ー", text)
             else:  # icons next to text (a chevron, a bullet) come out as stray one-letter "words"
                 text = " ".join(t for t in text.split() if len(t) > 1 or t in LONE_WORDS)
-            lines.append(Line(x0, y0, x1 - x0, y1 - y0, text, 0, self.tag, self.joiner))
+            lines.append(Line(x0 / scale, y0 / scale, (x1 - x0) / scale, (y1 - y0) / scale, text, 0, self.tag, self.joiner))
         return lines
 
 
@@ -129,8 +153,9 @@ class AutoRecognizer:
 
     def recognize(self, bgra, w, h):
         scored = []
+        prepared = prepare(bytes(bgra), w, h)  # once: every language reads the same picture
         for r in self.recognizers:
-            for line in r.recognize(bgra, w, h):
+            for line in r.read_prepared(*prepared):
                 fit, count = script_fit(line.text, line.tag)
                 scored.append((fit >= 0.7, fit * count, line))
         scored.sort(key=lambda item: (item[0], item[1]), reverse=True)
