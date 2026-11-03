@@ -19,4 +19,19 @@ class GoogleTranslateTest {
     fun anEmptyLineIsNoTranslation() {
         assertEquals(listOf("你好", null), GoogleTranslate.matchLines("你好\n  ", 2))
     }
+
+    @Test
+    fun aRedirectIsARefusalNotALostConnection() {
+        for (code in listOf(302, 403, 429, 503)) assertEquals(true, GoogleTranslate.isRefusal(code))
+        for (code in listOf(200, 400, 500)) assertEquals(false, GoogleTranslate.isRefusal(code))
+    }
+
+    @Test
+    fun waitsGrowStepByStepUpToALimit() {
+        assertEquals(5_000L, GoogleTranslate.waitAfterFailure(1))
+        assertEquals(30_000L, GoogleTranslate.waitAfterFailure(50))
+        assertEquals(60_000L, GoogleTranslate.waitAfterRefusal(1))
+        assertEquals(120_000L, GoogleTranslate.waitAfterRefusal(2))
+        assertEquals(600_000L, GoogleTranslate.waitAfterRefusal(40))
+    }
 }

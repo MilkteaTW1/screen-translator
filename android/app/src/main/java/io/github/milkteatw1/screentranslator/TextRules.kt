@@ -28,6 +28,8 @@ object TextRules {
         val letters = text.filter { it.isLetter() }
         if (letters.length < 2) return false
         val chars = text.filter { !it.isWhitespace() }
+        val alnum = chars.filter { it.isLetterOrDigit() }.map { it.lowercaseChar() }
+        if (alnum.size >= 6 && alnum.toSet().size <= 3) return false  // a row of dots or circles reads as "oooooooo"
         val noise = chars.count { !it.isLetterOrDigit() && it !in ALLOWED }
         if (noise.toDouble() / chars.length >= NOISE_RATIO) return false
         if (src.script == Script.JAPANESE) {
@@ -70,12 +72,28 @@ object TextRules {
         return true
     }
 
-    /** Swaps proper nouns for placeholders ("Z0Z") so the translator leaves them alone. */
+    private val termSplit = Regex("""\s*(?:=|＝|->|→)\s*""")
+
+    /** A glossary line: "NVIDIA" is never translated; "thread = 執行緒" is always translated that way.
+     *  Returns the term and the chosen translation (null: none). */
+    fun splitTerm(line: String): Pair<String, String?> {
+        val parts = line.trim().split(termSplit, 2)
+        return if (parts.size == 2 && parts[0].isNotEmpty() && parts[1].isNotEmpty()) parts[0] to parts[1] else line.trim() to null
+    }
+
+    private class Span(val first: Int, val last: Int, val forced: String?)
+
+    /** Swaps proper nouns and chosen terms for placeholders ("Z0Z") so the translator leaves them alone. */
     fun protect(text: String, glossary: List<String>, latin: Boolean): Pair<String, List<String>> {
-        val spans = mutableListOf<IntRange>()
-        for (term in glossary.sortedByDescending { it.length }) {
+        val spans = mutableListOf<Span>()
+        for (line in glossary.sortedByDescending { it.length }) {
+            val (term, forced) = splitTerm(line)
             if (term.isBlank()) continue
-            Regex(Regex.escape(term), RegexOption.IGNORE_CASE).findAll(text).forEach { spans += it.range }
+            // a chosen translation matches whole words (and a plural), so "thread" does not hit "threading"
+            val pattern = if (forced != null && term.all { it.code < 128 }) {
+                "(?<![A-Za-z0-9])" + Regex.escape(term) + "(?:e?s)?(?![A-Za-z0-9])"
+            } else Regex.escape(term)
+            Regex(pattern, RegexOption.IGNORE_CASE).findAll(text).forEach { spans += Span(it.range.first, it.range.last, forced) }
         }
         if (latin) {
             val words = latinWord.findAll(text).toList()
@@ -87,23 +105,29 @@ object TextRules {
                 val isCamel = camel.containsMatchIn(w)
                 val allCaps = w.length >= 2 && w.none { it.isLowerCase() } && w.any { it.isLetter() }
                 val capitalMid = w[0].isUpperCase() && !sentenceStart && w.length > 1 && !titleCase
-                if (isCamel || allCaps || capitalMid) spans += m.range
+                if (isCamel || allCaps || capitalMid) spans += Span(m.range.first, m.range.last, null)
             }
         }
-        spans.sortBy { it.first }
-        val merged = mutableListOf<IntRange>()
+        spans.sortWith(compareBy({ it.first }, { -it.last }))
+        class Group(val first: Int, var last: Int, val chosen: MutableList<Span>)
+        val merged = mutableListOf<Group>()
         for (s in spans) {
-            val last = merged.lastOrNull()
-            if (last != null && (s.first <= last.last || text.substring(last.last + 1, s.first).isBlank())) {
-                merged[merged.size - 1] = last.first..maxOf(last.last, s.last)
-            } else merged += s
+            val group = merged.lastOrNull()
+            if (group != null && (s.first <= group.last || text.substring(group.last + 1, s.first).isBlank())) {
+                group.last = maxOf(group.last, s.last)
+                if (s.forced != null && group.chosen.none { it.first <= s.last && s.first <= it.last }) group.chosen += s
+            } else merged += Group(s.first, s.last, if (s.forced != null) mutableListOf(s) else mutableListOf())
         }
         val originals = mutableListOf<String>()
         val out = StringBuilder()
         var pos = 0
         for (s in merged) {
             out.append(text, pos, s.first).append(" Z${originals.size}Z ")
-            originals += text.substring(s.first, s.last + 1)
+            val shown = StringBuilder(text.substring(s.first, s.last + 1))
+            for (c in s.chosen.sortedByDescending { it.first }) {  // the chosen translations replace their source words
+                shown.replace(c.first - s.first, c.last - s.first + 1, c.forced!!)
+            }
+            originals += shown.toString()
             pos = s.last + 1
         }
         out.append(text.substring(pos))

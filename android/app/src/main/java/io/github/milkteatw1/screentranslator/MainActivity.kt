@@ -165,12 +165,14 @@ class MainActivity : ComponentActivity() {
         val engine = Ui.card(ctx, getString(R.string.section_engine))
         val google = Ui.switch(ctx, getString(R.string.use_google), prefs.useGoogle)
         engine.addView(google)
+        val remember = Ui.switch(ctx, getString(R.string.remember_translations), prefs.rememberTranslations)
+        engine.addView(remember)
         pages[2].addView(engine)
         val names = Ui.card(ctx, getString(R.string.section_names))
         val skip = Ui.switch(ctx, getString(R.string.skip_names), prefs.skipNames)
         names.addView(skip)
         names.addView(Ui.label(ctx, getString(R.string.glossary_label)))
-        val glossary = Ui.field(ctx, prefs.glossary, lines = 3).apply { hint = "Hatsune Miku\nNVIDIA" }
+        val glossary = Ui.field(ctx, prefs.glossary, lines = 3).apply { hint = "Hatsune Miku\nNVIDIA\nthread = 執行緒" }
         names.addView(glossary)
         pages[2].addView(names)
         val speed = Ui.card(ctx, getString(R.string.section_speed))
@@ -228,12 +230,14 @@ class MainActivity : ComponentActivity() {
             prefs.intervalMs = ((interval.text.toString().toDoubleOrNull() ?: 1.0) * 1000).toInt().coerceAtLeast(100)
             prefs.skipNames = skip.isChecked
             prefs.useGoogle = google.isChecked
+            prefs.rememberTranslations = remember.isChecked
+            if (!remember.isChecked) TranslationMemory(TranslationMemory.fileIn(ctx)).clear()  // off means forgotten
             prefs.glossary = glossary.text.toString()
             prefs.speechMic = soundSource.selectedItemPosition == 1
             prefs.spokenLanguage = spokenCodes[speechLang.selectedItemPosition]
             prefs.speechModel = WhisperModel.models[modelChoice.selectedItemPosition].name
         }
-        for (s in listOf(google, skip)) s.setOnCheckedChangeListener { _, _ -> save() }
+        for (s in listOf(google, remember, skip)) s.setOnCheckedChangeListener { _, _ -> save() }
         val saveOnPick = object : AdapterView.OnItemSelectedListener {
             var first = 2
             override fun onItemSelected(p: AdapterView<*>?, v: View?, pos: Int, id: Long) {
