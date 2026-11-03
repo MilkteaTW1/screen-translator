@@ -18,5 +18,5 @@ translation boxes can be measured instead of judged from one screenshot.
 
 The pages are clean browser renderings in a few layouts, not real websites, so real pages may read worse. Video and photos are
 not covered. The box runs use a stand-in translator and clock, so OCR and network delays are left out, and translation quality
-is not measured at all. The Android app is not covered. CI machines have no OCR language packs, so there only the scroll test
-and the checks of the set itself run; run the rest on a Windows machine that has them.
+is not measured at all. The Android app is not covered. `tests/test_eval.py` covers English only (CI has English OCR, and skips
+those tests on a machine without it); the Chinese, Japanese and automatic-language scores come from `run_eval.py`.
