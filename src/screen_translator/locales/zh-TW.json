@@ -40,7 +40,7 @@
   "state_starting": "啟動中…",
   "status_running_google": "執行中(Google 翻譯)",
   "status_running_offline": "執行中(離線)",
-  "status_google_limited": "執行中(Google 暫時限制請求,先用離線翻譯)",
+  "status_google_limited": "執行中(Google 暫時拒絕這台電腦的請求,先用離線翻譯)",
   "status_google_unreachable": "執行中(連不上 Google,先用離線翻譯)",
   "status_packs_needed": "需要離線語言包:{names}(請執行 scripts/download_packs.py)",
   "status_error": "錯誤:{err}",

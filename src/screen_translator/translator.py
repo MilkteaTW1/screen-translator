@@ -226,7 +226,11 @@ def language_name(code):
 
 
 class RateLimited(OSError):
-    """Google answered "too many requests"."""
+    """Google refuses for now: "too many requests", or a redirect to its "unusual traffic" page."""
+
+
+REFUSED = {301, 302, 303, 307, 403, 429, 503}  # the network is fine, Google does not want to answer this machine
+_GOOGLE_POOL = ThreadPoolExecutor(max_workers=2)  # few requests at a time, on threads that keep their connection open
 
 
 _google_conn = threading.local()  # one kept-open connection per thread: no new TLS handshake for every request
@@ -246,11 +250,15 @@ def google_translate(text, src, dst, timeout=8):
             conn.request("POST", path, body, headers)
             resp = conn.getresponse()
             raw = resp.read()
-            if resp.status == 429:
-                raise RateLimited("Google answered 429 (too many requests)")
+            if resp.status in REFUSED:
+                raise RateLimited(f"Google refused with {resp.status}")
             if resp.status != 200:
                 raise OSError(f"Google answered {resp.status}")
             break
+        except RateLimited:
+            conn.close()
+            _google_conn.conn = None
+            raise  # asking again at once only makes it worse
         except Exception:
             conn.close()
             _google_conn.conn = None  # a stale kept-open connection: retry once on a fresh one
@@ -306,6 +314,8 @@ class Translator:
             size += len(item[2])
         if group:
             groups.append(group)
+        if self._limits:
+            groups = groups[:1]  # just found out whether Google answers again: one request, not a screenful
 
         limited = []
 
@@ -321,8 +331,7 @@ class Translator:
             except Exception:
                 return [(g[0], None) for g in group]
 
-        with ThreadPoolExecutor(max_workers=6) as pool:
-            done = dict(pair for part in pool.map(one, groups) for pair in part)
+        done = dict(pair for part in _GOOGLE_POOL.map(one, groups) for pair in part)
         if limited:
             self._limits += 1
             self._google_down = time.monotonic() + min(self.RATE_LIMITED, 60.0 * 2 ** (self._limits - 1))

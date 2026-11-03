@@ -40,7 +40,7 @@
   "state_starting": "Starting...",
   "status_running_google": "Running (Google Translate)",
   "status_running_offline": "Running (offline)",
-  "status_google_limited": "Running (Google is limiting requests: offline for now)",
+  "status_google_limited": "Running (Google is refusing requests from this computer for now: using offline)",
   "status_google_unreachable": "Running (cannot reach Google: offline for now)",
   "status_packs_needed": "Offline packs needed: {names} (run scripts/download_packs.py)",
   "status_error": "Error: {err}",

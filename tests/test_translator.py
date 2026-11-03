@@ -192,3 +192,55 @@ def test_too_many_requests_backs_off_step_by_step_and_a_success_resets_it(monkey
     monkeypatch.setattr(t, "google_translate", lambda text, *a: "你好")
     assert tr.translate("Hello once more.", "en", "zh-TW", "en-US", [], True, False) == "你好"
     assert tr._limits == 0 and tr.google_state() == "ok"
+
+
+def test_a_redirect_to_the_unusual_traffic_page_is_a_refusal_not_a_lost_connection(monkeypatch):
+    import screen_translator.translator as t
+
+    class Answer:
+        status = 302
+
+        def read(self):
+            return b""
+
+    class Conn:
+        made = 0
+
+        def __init__(self, *a, **k):
+            Conn.made += 1
+
+        def request(self, *a):
+            pass
+
+        def getresponse(self):
+            return Answer()
+
+        def close(self):
+            pass
+    monkeypatch.setattr(t.http.client, "HTTPSConnection", Conn)
+    t._google_conn.conn = None
+    with __import__("pytest").raises(t.RateLimited):
+        t.google_translate("Hello there", "en", "zh-TW")
+    assert Conn.made == 1  # not asked twice
+    tr = t.Translator()
+    tr.google = True
+    monkeypatch.setattr(tr, "_argos_many", lambda texts, *a: [None] * len(texts))
+    tr.translate_many(["Hello there, world.", "Another sentence here."], "en", "zh-TW", "en-US", [], False, False)
+    assert tr.google_state() == "limited"
+
+
+def test_while_refused_only_one_request_finds_out_if_google_answers_again(monkeypatch):
+    import screen_translator.translator as t
+    calls = []
+
+    def refused(texts, *a):
+        calls.append(texts)
+        raise t.RateLimited("302")
+    monkeypatch.setattr(t, "google_translate_group", refused)
+    tr = t.Translator()
+    tr.google = True
+    tr._limits = 1
+    monkeypatch.setattr(tr, "_argos_many", lambda texts, *a: [None] * len(texts))
+    texts = [f"This is sentence number {i} about the river." for i in range(40)]
+    tr.translate_many(texts, "en", "zh-TW", "en-US", [], False, False)
+    assert len(calls) == 1
