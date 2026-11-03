@@ -1,0 +1,311 @@
+{
+ "ocr_chosen": {
+  "all": {
+   "cer": 0.0215,
+   "missed": 19,
+   "lines": 622,
+   "noise": 0,
+   "exact": 0.832,
+   "ms": 32
+  },
+  "by": {
+   "article": {
+    "cer": 0.0417,
+    "missed": 0,
+    "lines": 20,
+    "noise": 0,
+    "exact": 0.4,
+    "ms": 52
+   },
+   "dark": {
+    "cer": 0.0452,
+    "missed": 19,
+    "lines": 242,
+    "noise": 0,
+    "exact": 0.752,
+    "ms": 32
+   },
+   "lang:en": {
+    "cer": 0.0206,
+    "missed": 19,
+    "lines": 602,
+    "noise": 0,
+    "exact": 0.847,
+    "ms": 32
+   },
+   "lang:ja": {
+    "cer": 0.0303,
+    "missed": 0,
+    "lines": 8,
+    "noise": 0,
+    "exact": 0.5,
+    "ms": 43
+   },
+   "lang:zh": {
+    "cer": 0.0526,
+    "missed": 0,
+    "lines": 12,
+    "noise": 0,
+    "exact": 0.333,
+    "ms": 77
+   },
+   "light": {
+    "cer": 0.0036,
+    "missed": 0,
+    "lines": 123,
+    "noise": 0,
+    "exact": 0.924,
+    "ms": 34
+   },
+   "lowcontrast": {
+    "cer": 0.0042,
+    "missed": 0,
+    "lines": 118,
+    "noise": 0,
+    "exact": 0.915,
+    "ms": 28
+   },
+   "sepia": {
+    "cer": 0.0048,
+    "missed": 0,
+    "lines": 119,
+    "noise": 0,
+    "exact": 0.891,
+    "ms": 32
+   }
+  },
+  "worst": [
+   [
+    "forum-dark-12",
+    0.189
+   ],
+   [
+    "docs-dark-12",
+    0.112
+   ],
+   [
+    "hero-dark-12",
+    0.092
+   ],
+   [
+    "zh-article-light",
+    0.088
+   ],
+   [
+    "table-dark-12",
+    0.055
+   ]
+  ],
+  "noise_text": []
+ },
+ "follow": {
+  "8": {
+   "good": 25,
+   "wrong": 0,
+   "refused": 1
+  },
+  "45": {
+   "good": 25,
+   "wrong": 0,
+   "refused": 1
+  },
+  "120": {
+   "good": 23,
+   "wrong": 0,
+   "refused": 1
+  },
+  "300": {
+   "good": 21,
+   "wrong": 0,
+   "refused": 1
+  }
+ },
+ "boxes_hidden": {
+  "scroll-forum-dark": {
+   "after_1s": {
+    "drawn": 12,
+    "stale": 0,
+    "misplaced": 1,
+    "overlaps": 0,
+    "covered": 16,
+    "lines": 21
+   },
+   "after_7s": {
+    "drawn": 12,
+    "stale": 0,
+    "misplaced": 1,
+    "overlaps": 0,
+    "covered": 16,
+    "lines": 21
+   },
+   "err_moving_px": 10.2
+  },
+  "scroll-article-light": {
+   "after_1s": {
+    "drawn": 15,
+    "stale": 0,
+    "misplaced": 0,
+    "overlaps": 0,
+    "covered": 17,
+    "lines": 18
+   },
+   "after_7s": {
+    "drawn": 15,
+    "stale": 0,
+    "misplaced": 0,
+    "overlaps": 0,
+    "covered": 17,
+    "lines": 18
+   },
+   "err_moving_px": 10.1
+  },
+  "vanish0": {
+   "before": {
+    "drawn": 3,
+    "stale": 1,
+    "misplaced": 0,
+    "overlaps": 0,
+    "covered": 2,
+    "lines": 2
+   },
+   "after_1s": {
+    "drawn": 3,
+    "stale": 1,
+    "misplaced": 0,
+    "overlaps": 0,
+    "covered": 2,
+    "lines": 2
+   },
+   "after_7s": {
+    "drawn": 3,
+    "stale": 1,
+    "misplaced": 0,
+    "overlaps": 0,
+    "covered": 2,
+    "lines": 2
+   },
+   "err_moving_px": null
+  },
+  "vanish1": {
+   "before": {
+    "drawn": 3,
+    "stale": 1,
+    "misplaced": 0,
+    "overlaps": 0,
+    "covered": 2,
+    "lines": 2
+   },
+   "after_1s": {
+    "drawn": 3,
+    "stale": 1,
+    "misplaced": 0,
+    "overlaps": 0,
+    "covered": 2,
+    "lines": 2
+   },
+   "after_7s": {
+    "drawn": 3,
+    "stale": 1,
+    "misplaced": 0,
+    "overlaps": 0,
+    "covered": 2,
+    "lines": 2
+   },
+   "err_moving_px": null
+  }
+ },
+ "boxes_in_picture": {
+  "scroll-forum-dark": {
+   "after_1s": {
+    "drawn": 12,
+    "stale": 0,
+    "misplaced": 1,
+    "overlaps": 1,
+    "covered": 16,
+    "lines": 21
+   },
+   "after_7s": {
+    "drawn": 12,
+    "stale": 0,
+    "misplaced": 1,
+    "overlaps": 1,
+    "covered": 16,
+    "lines": 21
+   },
+   "err_moving_px": 48.2
+  },
+  "scroll-article-light": {
+   "after_1s": {
+    "drawn": 18,
+    "stale": 3,
+    "misplaced": 1,
+    "overlaps": 0,
+    "covered": 16,
+    "lines": 18
+   },
+   "after_7s": {
+    "drawn": 18,
+    "stale": 3,
+    "misplaced": 1,
+    "overlaps": 0,
+    "covered": 16,
+    "lines": 18
+   },
+   "err_moving_px": 57.3
+  },
+  "vanish0": {
+   "before": {
+    "drawn": 3,
+    "stale": 1,
+    "misplaced": 0,
+    "overlaps": 0,
+    "covered": 2,
+    "lines": 2
+   },
+   "after_1s": {
+    "drawn": 3,
+    "stale": 1,
+    "misplaced": 0,
+    "overlaps": 0,
+    "covered": 2,
+    "lines": 2
+   },
+   "after_7s": {
+    "drawn": 3,
+    "stale": 1,
+    "misplaced": 0,
+    "overlaps": 0,
+    "covered": 2,
+    "lines": 2
+   },
+   "err_moving_px": null
+  },
+  "vanish1": {
+   "before": {
+    "drawn": 3,
+    "stale": 1,
+    "misplaced": 0,
+    "overlaps": 0,
+    "covered": 2,
+    "lines": 2
+   },
+   "after_1s": {
+    "drawn": 3,
+    "stale": 1,
+    "misplaced": 0,
+    "overlaps": 0,
+    "covered": 2,
+    "lines": 2
+   },
+   "after_7s": {
+    "drawn": 3,
+    "stale": 1,
+    "misplaced": 0,
+    "overlaps": 0,
+    "covered": 2,
+    "lines": 2
+   },
+   "err_moving_px": null
+  }
+ }
+}
