@@ -44,6 +44,12 @@ class UpdaterTest {
         assertNull(Updater.find(list(release("v0.6.0", false, "ScreenTranslator-0.6.0-x86_64.apk")), "0.5.0", arm))
     }
 
+    @Test fun theSingleApkFitsEveryPhone() {
+        val json = list(release("v0.5.17", false, "ScreenTranslator-Setup-0.5.17.exe", "ScreenTranslator-0.5.17.apk"))
+        assertEquals("https://x/v0.5.17/ScreenTranslator-0.5.17.apk", Updater.find(json, "0.5.16", arm)!!.url)
+        assertEquals("0.5.17", Updater.find(json, "0.5.16", listOf("x86_64"))!!.version)
+    }
+
     @Test fun picksTheNewestWhenSeveralQualify() {
         val json = list(
             release("v0.5.1", false, "ScreenTranslator-0.5.1-arm64.apk"),

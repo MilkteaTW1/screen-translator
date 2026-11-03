@@ -14,7 +14,8 @@ import java.net.URL
 /** Looks for a newer release on GitHub and installs its APK (Android always asks the user to confirm the install). */
 object Updater {
     private const val RELEASES = "https://api.github.com/repos/MilkteaTW1/screen-translator/releases?per_page=10"
-    private val APK = Regex("""^ScreenTranslator-.*-(arm64|x86_64)\.apk$""")
+    // the single APK for every phone, or an older per-ABI one (the group is empty for the single APK)
+    private val APK = Regex("""^ScreenTranslator-[\d.]+(?:-(arm64|x86_64))?\.apk$""")  
 
     class Update(val version: String, val url: String, val size: Long)
 
@@ -45,7 +46,7 @@ object Updater {
             val assets = r.getJSONArray("assets")
             val found = (0 until assets.length()).map { assets.getJSONObject(it) }
                 .mapNotNull { a -> APK.find(a.getString("name"))?.let { m -> m.groupValues[1] to a } }
-            val pick = tags.firstNotNullOfOrNull { tag -> found.firstOrNull { it.first == tag }?.second } ?: continue
+            val pick = tags.firstNotNullOfOrNull { tag -> found.firstOrNull { it.first == tag }?.second } ?: found.firstOrNull { it.first.isEmpty() }?.second ?: continue
             best = Update(version, pick.getString("browser_download_url"), pick.optLong("size"))
         }
         return best

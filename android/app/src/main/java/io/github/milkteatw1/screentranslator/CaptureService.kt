@@ -65,6 +65,8 @@ class CaptureService : Service() {
         private const val RETRY_MS = 3000L
         private const val SCROLL_SETTLE_MS = 350L  // the page counts as scrolling this long after the last measured shift
         private const val SCROLL_TICK_MS = 50L  // while it scrolls, look at every new picture to keep the boxes on their text
+        private const val MAX_VELOCITY = 4000f  // px/s: faster than any real scroll is a measuring slip
+        private const val MAX_LEAD = 120f  // most pixels the boxes are drawn ahead of the last measured position
         private const val SCROLL_LEAD = 0.03f  // seconds of display delay, on top of the time since the picture was taken
         private const val JUMP = 8.0  // a sudden change of this size (app switch, scroll start) means everything shown is out of date
         private const val COVER_CHANGE = 2.5  // mean brightness change under a cover that means the text there changed
@@ -79,6 +81,7 @@ class CaptureService : Service() {
         @Volatile var mode = -1  // where the translation goes; decided once, so it never hops around
         var seen = 1
         var missed = 0
+        var moved = false  // it rode along with a scroll since it was last read: it gets no second chance when missed
         /** What the screen looked like under our own cover once it was drawn; while it stays the same the text is unchanged. */
         var sig: IntArray? = null
         var stale = false  // the screen under the cover changed: read it again
@@ -418,6 +421,7 @@ class CaptureService : Service() {
             val both = frameDiff(bitmap)
             val screenDiff = both?.second  // without our own overlay
             staticScreen = screenDiff != null && screenDiff < 2.0
+            if (staticScreen && velocityY != 0f) { velocityY = 0f; overlay?.glide = 0f; publish() }  // just stopped: no overshoot
             val jumped = screenDiff != null && screenDiff > JUMP && lastScreenDiff < 3.0
             if (screenDiff != null) lastScreenDiff = screenDiff
             // A page that scrolls shifts as one piece: measure the shift and move the translations with it.
@@ -494,13 +498,14 @@ class CaptureService : Service() {
             val hidden = isShown(t) && !t.stale  // under our own box: its pixels say nothing, it goes with the picture
             if (!hidden && ScrollTracker.stayed(a, b, rowsMoved, r0, r1, c0, c1)) continue  // a fixed header or toolbar
             t.rect.offset(0f, dy.toFloat())
+            t.moved = true
             t.sig = null  // read the picture under the cover again once the page has settled
             t.shownAt = now
         }
         tracks = tracks.filter { it.rect.bottom > 0 && it.rect.top < height }
         cumShift += dy
         val dt = (now - lastFollowAt) / 1000f
-        velocityY = if (dt > 0f && dt < 0.5f) 0.5f * velocityY + 0.5f * (dy / dt) else dy / 0.1f
+        velocityY = (if (dt > 0f && dt < 0.5f) 0.5f * velocityY + 0.5f * (dy / dt) else dy / 0.1f).coerceIn(-MAX_VELOCITY, MAX_VELOCITY)
         lastFollowAt = now
         scrollUntil = now + SCROLL_SETTLE_MS
         publish()
@@ -710,6 +715,7 @@ class CaptureService : Service() {
                 used += t
                 t.seen++
                 t.missed = 0
+                t.moved = false
                 if (t.stale) { t.stale = false; t.shownAt = 0L }
                 if (!samePlace(t.rect, b.rect, maxOf(t.lineHeight, b.lineHeight))) {
                     t.rect = b.rect
@@ -721,8 +727,12 @@ class CaptureService : Service() {
             }
         }
         val carried = old.filter { it !in used }.onEach { it.missed++ }
-            .filter { it in held || (staticScreen && it.seen >= 2 && it.missed <= 1) }
-        tracks = fresh + carried
+            .filter { it in held || (staticScreen && it.seen >= 2 && it.missed <= 1 && !it.moved) }
+        // A scroll leaves a carried block a few pixels off its fresh twin: the same words close by, or boxes mostly on
+        // top of each other, are one block drawn twice.
+        val kept = ArrayList<Track>()
+        for (t in carried) if ((fresh + kept).none { duplicate(t, it) }) kept += t
+        tracks = fresh + kept
         Log.d(TAG, "scan blocks=${blocks.size} tracks=${tracks.size} unconfirmed=${tracks.count { it.seen < 2 }}")
 
         for (t in tracks) cache[t.text]?.let {
@@ -774,7 +784,7 @@ class CaptureService : Service() {
         shown = visible.map { TextRules.normalize(it.translation!!) }
         val scrolling = SystemClock.uptimeMillis() < scrollUntil
         // The tracks are where the text was when the last picture was taken; the page has moved on since.
-        val ahead = if (scrolling) velocityY * (SCROLL_LEAD + ((SystemClock.uptimeMillis() - lastFollowAt) / 1000f).coerceIn(0f, 0.25f)) else 0f
+        val ahead = if (scrolling) (velocityY * (SCROLL_LEAD + ((SystemClock.uptimeMillis() - lastFollowAt) / 1000f).coerceIn(0f, 0.12f))).coerceIn(-MAX_LEAD, MAX_LEAD) else 0f
         overlay?.glide = if (scrolling) velocityY else 0f
         overlay?.boxes = visible.map { OverlayView.Box(RectF(it.rect).apply { offset(0f, ahead) }, it.translation!!, it.lineHeight, it.mode) }
     }
@@ -832,6 +842,15 @@ class CaptureService : Service() {
         val inter = ix * iy
         val union = a.width() * a.height() + b.width() * b.height() - inter
         return if (union > 0) inter / union else 0f
+    }
+
+    private fun duplicate(a: Track, b: Track): Boolean {
+        val ix = maxOf(0f, minOf(a.rect.right, b.rect.right) - maxOf(a.rect.left, b.rect.left))
+        val iy = maxOf(0f, minOf(a.rect.bottom, b.rect.bottom) - maxOf(a.rect.top, b.rect.top))
+        val smaller = minOf(a.rect.width() * a.rect.height(), b.rect.width() * b.rect.height())
+        if (smaller > 0f && ix * iy / smaller > 0.3f) return true
+        val near = Math.abs(a.rect.top - b.rect.top) <= 2 * maxOf(a.rect.height(), b.rect.height()) && ix > 0f
+        return near && similar(a.text, b.text)
     }
 
     /** The block seen now is the earlier one: nearly the same text, and in (nearly) the same place. */

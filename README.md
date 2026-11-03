@@ -51,7 +51,7 @@ Translation goes to Google by default (the text is sent to Google); turn it off 
 
 ## Android
 
-Download `ScreenTranslator-x.y.z-arm64.apk` from the [Releases](../../releases) page (about 32 MB, Android 8+).
+Download `ScreenTranslator-x.y.z.apk` from the [Releases](../../releases) page (one file for every phone, Android 8+).
 It uses Google ML Kit on the phone: on-device OCR and translation, no account. Translation language data
 (about 30 MB per language) is downloaded only after you choose how: Wi-Fi only, any network, or not now.
 Chinese/Japanese/Korean text recognition models are fetched by Google Play services the first time they are used.
@@ -165,7 +165,7 @@ MIT
 
 ## Android 手機版
 
-到 [Releases](../../releases) 下載 `ScreenTranslator-x.y.z-arm64.apk`(約 32 MB,Android 8 以上)。
+到 [Releases](../../releases) 下載 `ScreenTranslator-x.y.z.apk`(一個檔案適用所有手機,Android 8 以上)。
 使用 Google ML Kit 在手機本機做 OCR 與翻譯,不需要帳號。翻譯語言資料(每個語言約 30 MB)
 會先問你要怎麼下載(僅 Wi-Fi、任何網路、或暫不下載)才會下載;中日韓文字辨識模型由 Google Play 服務在第一次使用時下載。
 
