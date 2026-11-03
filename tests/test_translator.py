@@ -155,3 +155,40 @@ def test_rows_of_dots_read_as_letters_are_not_text():
     assert not looks_like_source("oooooooooooooooooooo oooooooooooooooooooo", "en-US")
     assert not looks_like_source("oOo0o oo0oo OOOo0", "en-US")
     assert looks_like_source("The river trail is closed north of the old bridge", "en-US")
+
+
+def _google_tr(monkeypatch, answer):
+    import screen_translator.translator as t
+    tr = t.Translator()
+    tr.google = True
+    monkeypatch.setattr(t, "google_translate", answer)
+    monkeypatch.setattr(tr, "_argos_many", lambda texts, *a: [None] * len(texts))
+    return t, tr
+
+
+def test_one_failed_request_costs_seconds_and_says_why(monkeypatch):
+    def down(*a):
+        raise OSError("timeout")
+    t, tr = _google_tr(monkeypatch, down)
+    tr.translate("Hello there, world.", "en", "zh-TW", "en-US", [], True, False)
+    assert tr.google_state() == "unreachable"
+    assert tr._google_down - t.time.monotonic() <= 5.0
+    tr._google_down = 0.0
+    assert tr.google_state() == "ok"  # the wait is over: Google will be tried, so the status must not say offline
+
+
+def test_too_many_requests_backs_off_step_by_step_and_a_success_resets_it(monkeypatch):
+    import screen_translator.translator as tmod
+
+    def limited(*a):
+        raise tmod.RateLimited("429")
+    t, tr = _google_tr(monkeypatch, limited)
+    tr.translate("Hello there, world.", "en", "zh-TW", "en-US", [], True, False)
+    assert tr.google_state() == "limited" and tr._google_down - t.time.monotonic() <= 60.0
+    tr._google_down = 0.0
+    tr.translate("Hello there, again.", "en", "zh-TW", "en-US", [], True, False)
+    assert 60.0 < tr._google_down - t.time.monotonic() <= 120.0
+    tr._google_down = 0.0
+    monkeypatch.setattr(t, "google_translate", lambda text, *a: "你好")
+    assert tr.translate("Hello once more.", "en", "zh-TW", "en-US", [], True, False) == "你好"
+    assert tr._limits == 0 and tr.google_state() == "ok"

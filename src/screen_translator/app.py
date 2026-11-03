@@ -49,8 +49,10 @@ SCROLL_SETTLE = 0.35  # seconds the page must stay still after scrolling before 
 SCROLL_READ_EVERY = 0.4  # seconds between reads while the page keeps scrolling (new text keeps arriving)
 SCROLL_LEAD = 0.03  # seconds of display delay: while scrolling, boxes are drawn this far ahead on top of the capture delay
 TRANSLATE_THREADS = 3
-HIDDEN_MAX_STILL = 5.0  # seconds a box may stay up on the word that our own box hides, while the screen is still
-HIDDEN_MAX_MOVING = 1.5  # ... and while the screen keeps changing (what is under the box may be gone)
+TRANSLATE_RETRY = 5.0  # seconds before asking again for a translation no engine could give
+HIDDEN_MAX = 60.0  # seconds a box may stay up on text that it hides, while the picture around the box stays the same
+HIDDEN_NO_VIEW = 20.0  # ... and when nothing around the box can be seen (other boxes on every side)
+AROUND_CHANGED = 12  # mean brightness difference around a box that means the page under it has changed
 MAX_VELOCITY = 4000.0  # px/s: faster than any real scroll is a measuring slip, not something to draw ahead with
 MAX_LEAD = 120  # most pixels boxes are drawn ahead of the last measured position
 POLL = 0.08  # seconds between cheap looks at the screen (grab + compare is ~30 ms); a scan starts when it changed
@@ -159,6 +161,7 @@ class Worker(QObject):
         self.mask_own_overlay = True
         self._recognizer, self._prev, self._prev_keep, self._prev_gray = None, None, None, None
         self._prev_gray_boxes = []
+        self._picture = None  # the newest picture of the screen, one channel
         self._last_scan = 0.0
         self.async_scan = False  # read the screen on a thread of its own, so following a scroll never waits for OCR
         self._scan = None  # the read in flight: {epoch, shift, future, width, height}
@@ -271,6 +274,7 @@ class Worker(QObject):
             self.motion.emit(0.0, 0.0)
             self.results.emit(self._snapshot(now))
         green = arr[:, :, 1]  # one channel is enough to follow shifting text
+        self._picture = green
         scrolled = False
         if changed and self.tracks and self._prev_gray is not None and not self.static:
             shift = self._follow_scroll(self._prev_gray, green, boxes, self._prev_gray_boxes)
@@ -401,8 +405,37 @@ class Worker(QObject):
         if t.missing_packs:
             need = ", ".join(f"{a}→{b}" for a, b in sorted(t.missing_packs))
             return i18n.t("status_packs_needed", names=need)
-        engine = t.engine or ("google" if t.google else "offline")  # nothing translated yet: the one that will be tried
-        return i18n.t("status_running_google" if engine == "google" else "status_running_offline")
+        return i18n.t({"ok": "status_running_google", "limited": "status_google_limited",
+                       "unreachable": "status_google_unreachable"}.get(t.google_state(), "status_running_offline"))
+
+    def _around(self, t, boxes):
+        """The picture just around a block: (brightness samples, which of them show the page and not our own boxes)."""
+        x0, y0, x1, y1 = t["around_box"]
+        values = self._picture[y0:y1:3, x0:x1:3]
+        keep = np.ones(values.shape, bool)
+        for bx0, by0, bx1, by1 in [*boxes, (t["x"], t["y"], t["x"] + t["w"], t["y"] + t["h"])]:
+            keep[max(0, (int(by0) - 3 - y0) // 3 + 1):max(0, (int(by1) + 3 - y0) // 3 + 1),
+                 max(0, (int(bx0) - 3 - x0) // 3 + 1):max(0, (int(bx1) + 3 - x0) // 3 + 1)] = False
+        return values.astype(np.int16), keep
+
+    def _around_changed(self, t, boxes):
+        """Whether the page around a hidden block has changed since it was first hidden; None if none of it can be seen."""
+        if self._picture is None:
+            return None
+        if "around" not in t:
+            h, w = self._picture.shape
+            margin = max(10, int(t.get("lh") or t["h"]))
+            t["around_box"] = (max(0, int(t["x"]) - margin), max(0, int(t["y"]) - margin),
+                               min(w, int(t["x"] + t["w"]) + margin), min(h, int(t["y"] + t["h"]) + margin))
+            t["around"] = self._around(t, boxes)
+        was, was_keep = t["around"]
+        now, keep = self._around(t, boxes)
+        if now.shape != was.shape:
+            return None
+        both = keep & was_keep
+        if both.sum() < 20:
+            return None
+        return float(np.abs(now - was)[both].mean()) > AROUND_CHANGED
 
     def _read(self, recognizer, shot, boxes):
         """OCR of one picture (runs on the reading thread): lines that are not our own translations."""
@@ -455,11 +488,13 @@ class Worker(QObject):
                     used.add(id(part))
                     part["missed"] = 0
                     part.pop("hid", None)
+                    part.pop("around", None)
                     fresh.append(part)
                 continue
             if t:
                 used.add(id(t))
                 t.pop("hid", None)
+                t.pop("around", None)
                 t["moved"] = False
                 t["seen"] += 1
                 t["missed"] = 0
@@ -477,10 +512,15 @@ class Worker(QObject):
         for t in self.tracks:
             if id(t) not in used:
                 if _visible(t) is not None and self._cover_share((t["x"], t["y"], t["w"], t["h"]), boxes) >= 0.6:
-                    # hidden under our own box: the scan cannot see it, so it is assumed to be there, but only for a while:
-                    # nothing ever confirms it, and the text under a box that stays up forever may be long gone
+                    # hidden under our own box: the scan cannot see it, so what is around the box decides. A page that
+                    # changed there has probably changed under it too; a change elsewhere on the screen says nothing.
                     hid = t.setdefault("hid", time.monotonic())
-                    if time.monotonic() - hid <= (HIDDEN_MAX_STILL if self.static else HIDDEN_MAX_MOVING):
+                    if t.get("followed"):
+                        t.pop("around", None)  # the page moved: what is around it now is new
+                        hid = t["hid"] = time.monotonic()
+                    changed = self._around_changed(t, boxes)
+                    limit = HIDDEN_NO_VIEW if changed is None else HIDDEN_MAX
+                    if not changed and time.monotonic() - hid <= limit:
                         carried.append(t)
                     continue
                 if t.get("followed"):
@@ -510,7 +550,7 @@ class Worker(QObject):
         # Translate top to bottom in small batches and show each batch as it finishes, so a
         # screen full of text fills in progressively instead of freezing until everything is done.
         self._update_shown()
-        todo = [t for t in fresh if not t["done"] and not t.get("queued")][:MAX_BLOCKS]
+        todo = [t for t in fresh if not t["done"] and not t.get("queued") and t.get("retry_at", 0) <= time.monotonic()][:MAX_BLOCKS]
         jobs = [todo[i:i + BATCH] for i in range(0, len(todo), BATCH)]
         if self.background_translation:
             for batch in jobs:
@@ -539,7 +579,11 @@ class Worker(QObject):
             args = (ocr_tag_to_code(tag, supported), s["target"], tag, glossary, s["auto_proper"], s["keep_katakana"])
             for t, text, out in zip(same, texts, self.translator.translate_many(texts, *args)):
                 if t["text"] == text:  # the block was read differently meanwhile: this answer is for old text
-                    t["translation"], t["done"], t["queued"] = out, True, False
+                    # no answer from any engine is not the same as "nothing to translate": ask again in a moment
+                    known = out is not None or (text, args[0], args[1]) in self.translator.cache
+                    t["translation"], t["done"], t["queued"] = out, known, False
+                    if not known:
+                        t["retry_at"] = time.monotonic() + TRANSLATE_RETRY
                 else:
                     t["queued"] = False
         self._update_shown()
@@ -855,7 +899,7 @@ class Panel(QWidget):
         self.ui_language = code
         i18n.load(code)
         self.retranslate()
-        self.state.setText(t("state_stopped" if not self.worker.running else "status_running_offline"))
+        self.state.setText(self.worker._status_text() if self.worker.running else t("state_stopped"))
         self.language_changed.emit()
         self.apply()
 

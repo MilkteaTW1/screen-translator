@@ -6,7 +6,7 @@
    "lines": 622,
    "noise": 0,
    "exact": 0.929,
-   "ms": 119
+   "ms": 116
   },
   "by": {
    "article": {
@@ -15,7 +15,7 @@
     "lines": 20,
     "noise": 0,
     "exact": 0.75,
-    "ms": 165
+    "ms": 144
    },
    "dark": {
     "cer": 0.0055,
@@ -23,7 +23,7 @@
     "lines": 242,
     "noise": 0,
     "exact": 0.922,
-    "ms": 124
+    "ms": 117
    },
    "lang:en": {
     "cer": 0.0036,
@@ -31,7 +31,7 @@
     "lines": 602,
     "noise": 0,
     "exact": 0.935,
-    "ms": 117
+    "ms": 115
    },
    "lang:ja": {
     "cer": 0.0061,
@@ -39,7 +39,7 @@
     "lines": 8,
     "noise": 0,
     "exact": 0.875,
-    "ms": 171
+    "ms": 132
    },
    "lang:zh": {
     "cer": 0.0322,
@@ -47,7 +47,7 @@
     "lines": 12,
     "noise": 0,
     "exact": 0.667,
-    "ms": 165
+    "ms": 168
    },
    "light": {
     "cer": 0.002,
@@ -55,7 +55,7 @@
     "lines": 123,
     "noise": 0,
     "exact": 0.948,
-    "ms": 115
+    "ms": 116
    },
    "lowcontrast": {
     "cer": 0.0026,
@@ -63,7 +63,7 @@
     "lines": 118,
     "noise": 0,
     "exact": 0.941,
-    "ms": 124
+    "ms": 117
    },
    "sepia": {
     "cer": 0.0023,
@@ -71,7 +71,7 @@
     "lines": 119,
     "noise": 0,
     "exact": 0.941,
-    "ms": 107
+    "ms": 108
    }
   },
   "worst": [
@@ -307,5 +307,15 @@
    },
    "err_moving_px": null
   }
+ },
+ "flicker_boxes_hidden": {
+  "forum-dark-16": 0,
+  "article-light-16": 0,
+  "cards-dark-12": 0
+ },
+ "flicker_boxes_in_picture": {
+  "forum-dark-16": 0,
+  "article-light-16": 0,
+  "cards-dark-12": 0
  }
 }

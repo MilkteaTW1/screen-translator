@@ -268,13 +268,15 @@ def google_translate_group(texts, src, dst):
 
 
 class Translator:
-    RETRY_AFTER = 30.0  # seconds without trying Google again after it failed (offline...)
-    RATE_LIMITED = 600.0  # after "too many requests"
+    RETRY_AFTER = 30.0  # longest wait before trying Google again after it failed; one slow answer costs only a few seconds
+    RATE_LIMITED = 600.0  # longest wait after "too many requests", reached only if Google keeps saying it
 
     def __init__(self):
         self.cache = {}
         self.google = False  # use Google Translate first, the offline engine is the fallback
-        self._google_down = 0.0  # time of the last failure
+        self._google_down = 0.0  # Google is not tried again before this moment
+        self._fails = 0  # failures in a row
+        self._limits = 0  # "too many requests" in a row
         self.missing_packs = set()  # Argos packs we needed but don't have
         self.engine = None  # engine used for the most recent translation (None: nothing translated yet)
 
@@ -322,10 +324,22 @@ class Translator:
         with ThreadPoolExecutor(max_workers=6) as pool:
             done = dict(pair for part in pool.map(one, groups) for pair in part)
         if limited:
-            self._google_down = time.monotonic() + self.RATE_LIMITED
+            self._limits += 1
+            self._google_down = time.monotonic() + min(self.RATE_LIMITED, 60.0 * 2 ** (self._limits - 1))
         elif items and not any(done.values()):
-            self._google_down = time.monotonic() + self.RETRY_AFTER
+            self._fails += 1
+            self._google_down = time.monotonic() + min(self.RETRY_AFTER, 5.0 * self._fails)
+        elif any(done.values()):
+            self._fails = self._limits = 0
         return {i: out for i, out in done.items() if out}
+
+    def google_state(self):
+        """Why Google is not being used right now: 'off', 'limited', 'unreachable', or 'ok' (it will be tried)."""
+        if not self.google:
+            return "off"
+        if time.monotonic() >= self._google_down:
+            return "ok"
+        return "limited" if self._limits else "unreachable"
 
     def clear(self):
         self.cache.clear()

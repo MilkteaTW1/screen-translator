@@ -270,7 +270,7 @@ def look(ov, source_of, answers):
             r = a.intersected(b)
             smaller = min(a.width() * a.height(), b.width() * b.height())
             overlaps += smaller > 0 and r.width() * r.height() / smaller > 0.3
-    return {"drawn": len(ov.drawn), "stale": stale, "misplaced": misplaced, "overlaps": overlaps,
+    return {"sources": frozenset(source_of.get(t, "") for t in ov.drawn), "drawn": len(ov.drawn), "stale": stale, "misplaced": misplaced, "overlaps": overlaps,
             "err": errors, "covered": len(covered), "lines": len(answers)}
 
 
@@ -327,6 +327,22 @@ def boxes_case(frames, marks, lang, hide):
         s = seen[i]
         out[label] = {k: s[k] for k in ("drawn", "stale", "misplaced", "overlaps", "covered", "lines")}
     out["err_moving_px"] = round(statistics.mean(moving), 1) if moving else None
+    return out
+
+
+def eval_flicker(ix, hide, names=("forum-dark-16", "article-light-16", "cards-dark-12"), seconds=15):
+    """Translations that come and go on a page that stays put, while something elsewhere on the screen keeps moving."""
+    out = {}
+    for name in names:
+        e, base, answers = ix[name], picture(name), visible(ix[name]["lines"])
+        frames = []
+        for i in range(int(seconds / STEP)):
+            a = base.copy()
+            x = 900 + int(150 * np.sin(i / 3))
+            a[560:700, x:x + 200, :3] = (40 + i * 7 % 200, 90, 200)  # like a video playing in a corner
+            frames.append((a, answers))
+        seen = simulate(frames, e["lang"], hide)[int(2 / STEP):]
+        out[name] = sum(len(a["sources"] ^ b["sources"]) for a, b in zip(seen, seen[1:]))
     return out
 
 
@@ -387,6 +403,8 @@ def main():
         print(f"\nBoxes, hide_from_capture={hide}:")
         for name, r in results[key].items():
             print(f"  {name}: {r}")
+        results["flicker_" + key] = eval_flicker(ix, hide)
+        print("  flicker in 15 s:", results["flicker_" + key])
     if args.rapid:
         full, hybrid = rapid_readers()
         en = [e for e in stills if e["lang"] == "en-US"]
@@ -395,7 +413,7 @@ def main():
         results["rapid_hybrid"] = eval_ocr(en, hybrid)
         print_ocr("Windows finds, RapidOCR reads (English pictures)", results["rapid_hybrid"])
     if args.save:
-        keep = {k: results[k] for k in ("ocr_chosen", "follow", "boxes_hidden", "boxes_in_picture")}
+        keep = {k: results[k] for k in ("ocr_chosen", "follow", "boxes_hidden", "boxes_in_picture", "flicker_boxes_hidden", "flicker_boxes_in_picture")}
         (ROOT / "baseline.json").write_text(json.dumps(keep, ensure_ascii=False, indent=1), encoding="utf-8")
 
 

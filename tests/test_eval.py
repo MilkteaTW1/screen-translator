@@ -56,3 +56,24 @@ def test_boxes_follow_a_scroll_and_old_text_leaves_no_box():
         assert r["after_7s"]["overlaps"] <= base["after_7s"]["overlaps"], name
         if base["err_moving_px"] is not None:
             assert r["err_moving_px"] <= base["err_moving_px"] + 2, name
+
+
+@pytest.mark.parametrize("hide", [True, False])
+def test_boxes_do_not_flicker_while_something_else_on_screen_moves(hide):
+    try:
+        run_eval.ocr.make_recognizer("en-US")
+    except RuntimeError:
+        pytest.skip("no English OCR installed in Windows")
+    got = run_eval.eval_flicker(run_eval.index(), hide, names=("cards-dark-12",), seconds=8)
+    assert got["cards-dark-12"] == 0
+
+
+def test_a_box_hiding_text_that_vanished_goes_away_even_when_boxes_are_in_the_picture():
+    ix = run_eval.index()
+    try:
+        run_eval.ocr.make_recognizer("en-US")
+    except RuntimeError:
+        pytest.skip("no English OCR installed in Windows")
+    for name, r in run_eval.eval_boxes(ix, False).items():
+        if name.startswith("vanish"):
+            assert r["after_7s"]["stale"] == 0, name
