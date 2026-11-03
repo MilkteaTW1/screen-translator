@@ -20,7 +20,7 @@
   "group_names": "Names and terms",
   "auto_proper": "Auto-detect proper nouns (Capitalized / ALL CAPS / CamelCase)",
   "keep_katakana": "Japanese: keep ALL katakana untranslated (also loanwords like タワー)",
-  "glossary_label": "Do-not-translate list",
+  "glossary_label": "Do-not-translate list and chosen translations",
   "glossary_placeholder": "Never translate these (one per line)\ne.g. Hatsune Miku\nNVIDIA",
   "group_engine": "Translation engine",
   "google_enable": "Use Google Translate first (sends the text to Google; the offline engine is the backup)",
