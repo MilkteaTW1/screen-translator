@@ -43,7 +43,7 @@ def test_the_worker_translates_each_block_from_its_own_language_and_skips_the_ta
     recognizer = AutoRecognizer([ENGLISH, JAPANESE, CHINESE])
 
     class Shot:
-        bgra, width, height = b"", 500, 200
+        bgra, width, height = bytes(500 * 200 * 4), 500, 200
     for _ in range(2):  # a block is shown once seen twice
         items = worker._process(recognizer, Shot, worker.settings)
         worker.dirty = False
