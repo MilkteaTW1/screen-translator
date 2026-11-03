@@ -160,29 +160,51 @@ def _auto_proper_spans(text, base, keep_katakana):
     return spans
 
 
+TERM_SPLIT_RE = re.compile(r"\s*(?:=|＝|->|→)\s*")
+
+
+def split_term(line):
+    """A glossary line: "NVIDIA" is never translated; "thread = 執行緒" is always translated that way.
+    Returns (term, forced translation or None)."""
+    parts = TERM_SPLIT_RE.split(line.strip(), maxsplit=1)
+    if len(parts) == 2 and parts[0] and parts[1]:
+        return parts[0], parts[1]
+    return line.strip(), None
+
+
 def protect(text, glossary, base, auto, keep_katakana):
-    """Swap proper nouns for placeholders. Returns (text, [originals])."""
-    spans = []
-    for term in sorted(glossary, key=len, reverse=True):
-        for m in re.finditer(re.escape(term), text, re.IGNORECASE):
-            spans.append(m.span())
+    """Swap proper nouns and chosen terms for placeholders. Returns (text, [what goes back in])."""
+    spans = []  # (start, end, forced translation or None)
+    for line in sorted(glossary, key=len, reverse=True):
+        term, forced = split_term(line)
+        if not term:
+            continue
+        # a chosen translation matches whole words (and a plural), so "thread" does not hit "threading"
+        pattern = rf"(?<![A-Za-z0-9]){re.escape(term)}(?:e?s)?(?![A-Za-z0-9])" if forced and term.isascii() else re.escape(term)
+        for m in re.finditer(pattern, text, re.IGNORECASE):
+            spans.append((*m.span(), forced))
     if auto:
-        spans += _auto_proper_spans(text, base, keep_katakana)
+        spans += [(s, e, None) for s, e in _auto_proper_spans(text, base, keep_katakana)]
     # merge overlaps, keep longest-first order by start
-    spans.sort()
-    merged = []
-    for s, e in spans:
+    spans.sort(key=lambda sp: (sp[0], -sp[1]))
+    merged = []  # [start, end, [forced pieces (start, end, translation)]]
+    for s, e, forced in spans:
         # Overlapping spans, or names separated only by spaces ("Certified Online English Teacher"),
         # become one placeholder: neighbouring placeholders get glued together by the model.
         if merged and (s < merged[-1][1] or not text[merged[-1][1]:s].strip()):
-            merged[-1] = (merged[-1][0], max(e, merged[-1][1]))
+            merged[-1][1] = max(e, merged[-1][1])
+            if forced and not any(p[0] < e and s < p[1] for p in merged[-1][2]):
+                merged[-1][2].append((s, e, forced))
         else:
-            merged.append((s, e))
+            merged.append([s, e, [(s, e, forced)] if forced else []])
     originals, out, pos = [], [], 0
-    for s, e in merged:
+    for s, e, pieces in merged:
         out.append(text[pos:s])
         out.append(f" Z{len(originals)}Z ")
-        originals.append(text[s:e])
+        shown = text[s:e]
+        for ps, pe, forced in sorted(pieces, reverse=True):  # the chosen translations replace their source words
+            shown = shown[:ps - s] + forced + shown[pe - s:]
+        originals.append(shown)
         pos = e
     out.append(text[pos:])
     return re.sub(r"\s+", " ", "".join(out)).strip(), originals

@@ -20,7 +20,7 @@
   "group_names": "名稱與詞彙",
   "auto_proper": "自動偵測專有名詞(首字大寫 / 全大寫 / 駝峰式)",
   "keep_katakana": "日文:所有片假名都不翻譯(包含 タワー 這類外來語)",
-  "glossary_label": "不翻譯清單",
+  "glossary_label": "不翻譯清單與指定譯法",
   "glossary_placeholder": "這些詞永遠不翻譯(每行一個)\n例如 Hatsune Miku\nNVIDIA",
   "group_engine": "翻譯引擎",
   "google_enable": "優先使用 Google 翻譯(文字會傳送給 Google,離線翻譯當備援)",
