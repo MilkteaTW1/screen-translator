@@ -11,6 +11,8 @@ MIN_PEAK = 0.08  # phase-correlation peak below this: the picture did not just s
 MAX_ERROR = 14.0  # mean pixel difference (0-255) under which a patch counts as "the same pixels"
 PROBES = 4  # text blocks used to find the exact shift
 PROBE_SIZE = (400, 60)  # largest patch (w, h) compared per probe
+MAX_SHIFT = 0.6  # a shift longer than this share of the screen height is more likely a mismatch than a scroll
+MAX_PROBE_ERROR = 2 * MAX_ERROR  # no probe matching better than this at the measured shift: the shift is not real
 
 
 def shrink(gray, k=COARSE):
@@ -67,7 +69,7 @@ def _refine(tracks, prev, cur, dx, dy):
         if len(probes) == PROBES:
             break
     if not probes:
-        return dx, dy
+        return dx, dy, None
 
     def cost(ax, ay):
         errors = [_error(prev, cur, p, ax, ay) for p in probes]
@@ -76,7 +78,7 @@ def _refine(tracks, prev, cur, dx, dy):
     span = range(-COARSE - 1, COARSE + 2)
     best_dy = min((dy + j for j in span), key=lambda ay: cost(dx, ay))
     best_dx = min((dx + i for i in span), key=lambda ax: cost(ax, best_dy))
-    return best_dx, best_dy
+    return best_dx, best_dy, cost(best_dx, best_dy)
 
 
 def follow(tracks, prev, cur, ignore=()):
@@ -97,7 +99,11 @@ def follow(tracks, prev, cur, ignore=()):
         return None
     if dx == 0 and dy == 0:
         return 0, 0
-    dx, dy = _refine(tracks, prev, cur, dx * COARSE, dy * COARSE)
+    dx, dy, fit = _refine(tracks, prev, cur, dx * COARSE, dy * COARSE)
+    if abs(dy) > MAX_SHIFT * prev.shape[0] or abs(dx) > MAX_SHIFT * prev.shape[1]:
+        return None  # too far to be one scroll step: repeating text or a page change fooled the measurement
+    if fit is not None and fit > MAX_PROBE_ERROR:
+        return None  # not even the best-matching text block looks the same after moving: do not move anything
     moved = 0
     for t in tracks:
         box = _box(t)
@@ -114,7 +120,8 @@ def follow(tracks, prev, cur, ignore=()):
         # "not clearly moving" is not enough to leave it behind.
         go, stay = _error(prev, cur, box, dx, dy), _error(prev, cur, box, 0, 0)
         stayed = stay is not None and stay < MAX_ERROR and (go is None or stay < 0.7 * go)
-        if not stayed:
+        gone = go is not None and go > MAX_PROBE_ERROR and not stayed  # its pixels are not there after the move
+        if not stayed and not gone:
             t["x"] += dx
             t["y"] += dy
             t["followed"] = True

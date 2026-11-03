@@ -49,6 +49,8 @@ SCROLL_SETTLE = 0.35  # seconds the page must stay still after scrolling before 
 SCROLL_READ_EVERY = 0.4  # seconds between reads while the page keeps scrolling (new text keeps arriving)
 SCROLL_LEAD = 0.03  # seconds of display delay: while scrolling, boxes are drawn this far ahead on top of the capture delay
 TRANSLATE_THREADS = 3
+MAX_VELOCITY = 4000.0  # px/s: faster than any real scroll is a measuring slip, not something to draw ahead with
+MAX_LEAD = 120  # most pixels boxes are drawn ahead of the last measured position
 POLL = 0.08  # seconds between cheap looks at the screen (grab + compare is ~30 ms); a scan starts when it changed
 CONFIRM_GAP = 0.1  # seconds before the second look that confirms newly seen text
 
@@ -269,6 +271,7 @@ class Worker(QObject):
             dt = now - self._last_follow
             if 0 < dt < 0.5:
                 vx, vy = shift[0] / dt, shift[1] / dt
+                vx, vy = (max(-MAX_VELOCITY, min(MAX_VELOCITY, v)) for v in (vx, vy))
                 self.velocity = (0.5 * self.velocity[0] + 0.5 * vx, 0.5 * self.velocity[1] + 0.5 * vy)
             else:
                 self.velocity = (0.0, 0.0)
@@ -368,8 +371,8 @@ class Worker(QObject):
             # along from here until the next update.)
             since = time.monotonic() - self._last_follow if self._last_follow else 0.0
             lead = SCROLL_LEAD + min(0.25, max(0.0, since))
-            ox += int(round(self.velocity[0] * lead))
-            oy += int(round(self.velocity[1] * lead))
+            ox += max(-MAX_LEAD, min(MAX_LEAD, int(round(self.velocity[0] * lead))))
+            oy += max(-MAX_LEAD, min(MAX_LEAD, int(round(self.velocity[1] * lead))))
         items = [(x + ox, y + oy, w, h, None, lh) for x, y, w, h, lh in self._others]
         items += [(t["x"] + ox, t["y"] + oy, t["w"], t["h"], _visible(t), t["lh"]) for t in self.tracks]
         return items
