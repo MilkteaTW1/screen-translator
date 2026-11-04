@@ -132,6 +132,7 @@ class CaptureService : Service() {
     private var velocityY = 0f  // px/s the page is scrolling (down is positive)
     private var lastFollowAt = 0L
     @Volatile private var scrollUntil = 0L
+    private var hiddenForScroll = false  // translations are not drawn right now because the page is scrolling
     private var epoch = 0  // bumped when what a running OCR would find is no longer valid (the page was replaced)
     @Volatile private var ocrBusy = false
     private var ocrFrame: Bitmap? = null  // the picture handed to OCR: a copy, because `frame` is overwritten by the next one
@@ -380,7 +381,7 @@ class CaptureService : Service() {
         var delay = prefs.intervalMs.toLong().coerceAtLeast(100)
         if (!staticScreen) delay = minOf(delay, MOVING_SCAN_MS)  // the screen is changing: keep up with it
         if (SystemClock.uptimeMillis() < scrollUntil) delay = minOf(delay, SCROLL_TICK_MS)
-        else if (velocityY != 0f) { velocityY = 0f; overlay?.glide = 0f; publish() }  // the scroll ended
+        else if (velocityY != 0f || hiddenForScroll) { velocityY = 0f; overlay?.glide = 0f; hiddenForScroll = false; publish() }  // the scroll ended
         try {
             val unconfirmed = scan()
             if (unconfirmed) delay = minOf(delay, 300)  // look again soon to confirm new text
@@ -790,7 +791,8 @@ class CaptureService : Service() {
         // The tracks are where the text was when the last picture was taken; the page has moved on since.
         val ahead = if (scrolling) (velocityY * (SCROLL_LEAD + ((SystemClock.uptimeMillis() - lastFollowAt) / 1000f).coerceIn(0f, 0.12f))).coerceIn(-MAX_LEAD, MAX_LEAD) else 0f
         overlay?.glide = if (scrolling) velocityY else 0f
-        overlay?.boxes = visible.map { OverlayView.Box(RectF(it.rect).apply { offset(0f, ahead) }, it.translation!!, it.lineHeight, it.mode) }
+        hiddenForScroll = scrolling && prefs.hideOnScroll  // drawn again, once, when the page has stopped
+        overlay?.boxes = if (hiddenForScroll) emptyList() else visible.map { OverlayView.Box(RectF(it.rect).apply { offset(0f, ahead) }, it.translation!!, it.lineHeight, it.mode) }
     }
 
     /** Translations of several blocks: Google takes them in one request; whatever it can't do goes offline one by one. */
