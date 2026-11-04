@@ -432,3 +432,27 @@ def test_one_likeliest_reason_is_given_when_text_is_read_but_not_translated(monk
     tr.offline_error = "RuntimeError: boom"
     assert tr.problem() == ("offline", "RuntimeError: boom")  # the engine itself broke: that comes first
 
+
+
+from screen_translator.translator import Translator  # noqa: E402
+
+
+def test_google_requests_are_budgeted_and_the_rest_goes_offline():
+    tr = Translator()
+    tr.GOOGLE_BUDGET = 3
+    assert tr._google_slots(2) == 2
+    assert tr._google_slots(5) == 1  # only one left in the window
+    assert tr._google_slots(1) == 0
+    tr._google_sent = [t - tr.GOOGLE_WINDOW - 1 for t in tr._google_sent]  # the window has passed
+    assert tr._google_slots(2) == 2
+
+
+def test_a_draft_asks_nobody_and_is_not_remembered(monkeypatch):
+    tr = Translator()
+    tr.google = True
+    calls = []
+    monkeypatch.setattr(tr, "_google_many", lambda *a, **k: calls.append(a) or {})
+    monkeypatch.setattr(tr, "_argos_many", lambda texts, src, dst: ["譯:" + t for t in texts])
+    out = tr.translate("hello there friend", "en", "zh-TW", "en", [], False, False, online=False)
+    assert out == "譯:hello there friend" and not calls
+    assert ("hello there friend", "en", "zh-TW") not in tr.cache

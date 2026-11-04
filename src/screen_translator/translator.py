@@ -412,6 +412,7 @@ class Translator:
 
     def __init__(self):
         self.cache = {}
+        self._google_sent = []  # when the recent Google requests were made (monotonic seconds)
         self.google = False  # use Google Translate first, the offline engine is the fallback
         self.better = False  # the offline engine is the optional language model (when it is downloaded), not the standard packs
         self._google_down = 0.0  # Google is not tried again before this moment
@@ -441,6 +442,17 @@ class Translator:
                 texts = packs.translate_many(texts, *pair)
         return texts
 
+    GOOGLE_BUDGET = 24  # Google requests allowed per GOOGLE_WINDOW seconds: more than that and it starts refusing this computer
+    GOOGLE_WINDOW = 60.0
+
+    def _google_slots(self, wanted):
+        """How many of `wanted` Google requests fit in the budget right now (and counts them as made)."""
+        now = time.monotonic()
+        self._google_sent = [t for t in self._google_sent if now - t < self.GOOGLE_WINDOW]
+        n = max(0, min(wanted, self.GOOGLE_BUDGET - len(self._google_sent)))
+        self._google_sent += [now] * n
+        return n
+
     def _google_many(self, items, src, dst):
         """{index: translation} for the items Google could do; nothing when it is unreachable."""
         if time.monotonic() < self._google_down:
@@ -457,6 +469,7 @@ class Translator:
             groups.append(group)
         if self._limits:
             groups = groups[:1]  # just found out whether Google answers again: one request, not a screenful
+        groups = groups[:self._google_slots(len(groups))]  # a budget: what is over it is translated offline instead
 
         limited = []
 
@@ -537,8 +550,8 @@ class Translator:
     def clear(self):
         self.cache.clear()
 
-    def translate(self, text, src, dst, ocr_tag, glossary, auto, keep_katakana):
-        return self.translate_many([text], src, dst, ocr_tag, glossary, auto, keep_katakana)[0]
+    def translate(self, text, src, dst, ocr_tag, glossary, auto, keep_katakana, online=True):
+        return self.translate_many([text], src, dst, ocr_tag, glossary, auto, keep_katakana, online)[0]
 
     @staticmethod
     def _finish(text, out, originals, dst):
@@ -553,7 +566,7 @@ class Translator:
             result = None
         return result
 
-    def translate_many(self, texts, src, dst, ocr_tag, glossary, auto, keep_katakana):
+    def translate_many(self, texts, src, dst, ocr_tag, glossary, auto, keep_katakana, online=True):
         """Translate several texts at once. The offline engine takes them in one batch, which is far faster
         than one call each (a screen full of text: 2.0 s one by one, 0.8 s batched)."""
         results = [None] * len(texts)
@@ -574,13 +587,13 @@ class Translator:
                 continue
             todo.append((i, text, protected, originals))
         outs = {}
-        if self.google:
+        if self.google and online:  # online=False: a quick local draft (the sentence being spoken), no request to anyone
             outs = self._google_many(todo, src, dst)
             if outs:
                 self.engine = "google"
         from_google = {i for i, out in outs.items() if out}
         rest = [item for item in todo if not outs.get(item[0])]
-        if rest and self.server:
+        if rest and self.server and online:
             more = self._server_many(rest, src, dst)
             if more:
                 outs.update(more)
@@ -606,7 +619,8 @@ class Translator:
                 results[i] = self._finish(text, outs[i], originals, dst)
             except Exception:
                 continue
-            self.cache[(text, src, dst)] = results[i]
+            if online:  # a draft is not remembered: the finished text must still go to Google
+                self.cache[(text, src, dst)] = results[i]
             if self.disk and results[i] and i in from_google:
                 self.disk.put(text, src, dst, sig, results[i])
         return results

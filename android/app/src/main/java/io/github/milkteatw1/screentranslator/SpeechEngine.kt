@@ -177,7 +177,7 @@ class SpeechEngine(
                     if (now - liveTranslatedAt >= LIVE_TRANSLATE_MS) {  // not every new word: that is a request each
                         liveTranslatedAt = now
                         translating.execute {
-                            val out = translate(text, code)
+                            val out = translate(text, code, online = false)  // a local draft: the finished sentence goes to Google once
                             if (forSentence == sentence && out.isNotEmpty()) {
                                 liveOut = out to forSentence
                                 onPartial(text, out)
@@ -202,15 +202,15 @@ class SpeechEngine(
     }
 
     /** The translation of [said], spoken in [code]: "" when it is already the target language or nothing works. */
-    private fun translate(said: String, code: String): String {
+    private fun translate(said: String, code: String, online: Boolean = true): String {
         val spoken = code.lowercase()
         if (spoken == target.code) return ""
         return try {
             val (protectedText, originals) = TextRules.protect(said, glossary, false)
-            val google = if (useGoogle) GoogleTranslate.translate(protectedText, target) else null
+            val google = if (useGoogle && online) GoogleTranslate.translate(protectedText, target) else null
             var out = google
                 ?: offline(spoken)?.let { Tasks.await(it.translate(protectedText), 20, TimeUnit.SECONDS) }
-                ?: run { reportTrouble(""); return "" }
+                ?: run { if (online) reportTrouble(""); return "" }
             out = TextRules.restore(out, originals)
             if (target.traditional) {
                 out = hansHant?.transliterate(out) ?: out
