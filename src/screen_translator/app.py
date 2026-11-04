@@ -38,7 +38,7 @@ CACHE_PATH = SETTINGS_PATH.with_name("translations.jsonl")
 DEFAULTS = {
     "source": "en-US", "target": "zh-TW", "interval": 1.0,
     "auto_proper": True, "keep_katakana": False, "glossary": "",
-    "hide_from_capture": True, "skip_names": True, "disk_cache": True,
+    "hide_from_capture": True, "skip_names": True, "disk_cache": True, "hide_on_scroll": False,
     "autostart": False, "start_on_launch": False,
     "speech_enabled": False, "speech_source": "system", "speech_model": "base", "speech_lang": "auto",
     "use_google": True,
@@ -287,7 +287,9 @@ class Worker(QObject):
         self._picture = green
         scrolled = False
         if changed and self.tracks and self._prev_gray is not None and not self.static:
-            shift = self._follow_scroll(self._prev_gray, green, boxes, self._prev_gray_boxes)
+            dt = now - self._last_follow
+            hint = (self.velocity[0] * dt, self.velocity[1] * dt) if self._last_follow and 0 < dt < 0.5 else None
+            shift = self._follow_scroll(self._prev_gray, green, boxes, self._prev_gray_boxes, hint)
             scrolled = shift not in (None, (0, 0))  # (0, 0): nothing measurable moved
             if shift != (0, 0):  # (0, 0): too little to measure yet
                 self._prev_gray, self._prev_gray_boxes = green, boxes
@@ -377,13 +379,13 @@ class Worker(QObject):
         self.dirty = self.dirty or any(t["seen"] < 2 for t in self.tracks)
         self._last_scan = time.monotonic()
 
-    def _follow_scroll(self, before, now, boxes=(), before_boxes=()):
+    def _follow_scroll(self, before, now, boxes=(), before_boxes=(), hint=None):
         """The picture scrolled: move the translations with it right away (no OCR, no new translation), and drop
         the ones that left the screen. Returns what tracking.follow returned."""
         for t in self.tracks:  # a block hidden under our own box cannot show its own pixels moving
             t["covered"] = bool(before_boxes) and _visible(t) is not None and self._cover_share(
                 (t["x"], t["y"], t["w"], t["h"]), before_boxes) >= 0.6
-        shift = tracking.follow(self.tracks, before, now, ignore=[*boxes, *before_boxes])
+        shift = tracking.follow(self.tracks, before, now, ignore=[*boxes, *before_boxes], hint=hint)
         if not shift or shift == (0, 0):
             return shift
         dx, dy = shift
@@ -398,7 +400,9 @@ class Worker(QObject):
         """What the overlay draws. Lines we don't translate are included (text None) so it avoids covering them.
         While the page scrolls, everything is drawn a little ahead along the scroll."""
         ox, oy = self.origin
-        if (time.monotonic() if now is None else now) < self.scrolling_until:
+        moving = (time.monotonic() if now is None else now) < self.scrolling_until
+        hide = moving and bool(self.settings.get("hide_on_scroll"))  # drawn again, once, when the page has stopped
+        if moving:
             # The tracks are where the text was when the last picture was taken. By the time they are drawn the page
             # has moved on: the time since that picture, plus a little for the display. (The overlay carries the boxes
             # along from here until the next update.)
@@ -407,7 +411,7 @@ class Worker(QObject):
             ox += max(-MAX_LEAD, min(MAX_LEAD, int(round(self.velocity[0] * lead))))
             oy += max(-MAX_LEAD, min(MAX_LEAD, int(round(self.velocity[1] * lead))))
         items = [(x + ox, y + oy, w, h, None, lh) for x, y, w, h, lh in self._others]
-        items += [(t["x"] + ox, t["y"] + oy, t["w"], t["h"], _visible(t), t["lh"]) for t in self.tracks]
+        items += [(t["x"] + ox, t["y"] + oy, t["w"], t["h"], None if hide else _visible(t), t["lh"]) for t in self.tracks]
         return items
 
     def _status_text(self):
@@ -708,6 +712,7 @@ class Panel(QWidget):
         self.hide_capture = self._check("hide_capture", s["hide_from_capture"])
         self.skip_names = self._check("skip_names", s["skip_names"])
         self.disk_cache = self._check("disk_cache", s["disk_cache"])
+        self.hide_on_scroll = self._check("hide_on_scroll", s["hide_on_scroll"])
         self.autostart = self._check("autostart", s["autostart"])
         self.start_on_launch = self._check("start_on_launch", s["start_on_launch"])
         self.google = self._check("google_enable", s["use_google"])
@@ -767,6 +772,7 @@ class Panel(QWidget):
         lay.addWidget(self.hide_capture)
         lay.addWidget(self.skip_names)
         lay.addWidget(self.disk_cache)
+        lay.addWidget(self.hide_on_scroll)
         lay.addStretch(1)
         self._tab(translate, "tab_translate")
 
@@ -848,6 +854,7 @@ class Panel(QWidget):
         self.hide_capture.toggled.connect(self.apply)
         self.skip_names.toggled.connect(self.apply)
         self.disk_cache.toggled.connect(self.apply)
+        self.hide_on_scroll.toggled.connect(self.apply)
         self.auto.toggled.connect(self.apply)
         self.kata.toggled.connect(self.apply)
         self.glossary.textChanged.connect(self.apply)
@@ -952,6 +959,7 @@ class Panel(QWidget):
             "hide_from_capture": self.hide_capture.isChecked(),
             "skip_names": self.skip_names.isChecked(),
             "disk_cache": self.disk_cache.isChecked(),
+            "hide_on_scroll": self.hide_on_scroll.isChecked(),
             "use_google": self.google.isChecked(),
             "server_kind": self.server_kind.currentData(), "server_url": self.server_url.text(),
             "server_key": self.server_key.text(), "server_model": self.server_model.text(),

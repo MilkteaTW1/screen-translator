@@ -105,3 +105,16 @@ def test_a_paragraph_that_grows_while_it_scrolls_in_keeps_its_translation_until_
     track.update(done=True, translation="新譯文")
     assert appmod._visible(track) == "新譯文"
     assert appmod._visible({**track, "seen": 1}) is None
+
+
+def test_translations_can_be_hidden_while_the_page_scrolls_and_come_back_when_it_stops():
+    import time
+    QApplication.instance() or QApplication([])
+    worker = appmod.Worker(appmod.LANGUAGES)
+    worker.tracks = [{"x": 10, "y": 20, "w": 300, "h": 30, "lh": 20, "seen": 2, "done": True, "translation": "你好"}]
+    worker.scrolling_until = time.monotonic() + 5  # the page is moving
+    for hide, shown in ((False, "你好"), (True, None)):
+        worker.settings = {**worker.settings, "hide_on_scroll": hide}
+        assert [i[4] for i in worker._snapshot()] == [shown]
+    worker.scrolling_until = 0.0  # it stopped
+    assert [i[4] for i in worker._snapshot()] == ["你好"]

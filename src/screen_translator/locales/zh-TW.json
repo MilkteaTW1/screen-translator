@@ -8,6 +8,7 @@
   "translate_to": "翻譯成",
   "refresh_interval": "更新間隔",
   "hide_capture": "截圖時隱藏翻譯",
+  "hide_on_scroll": "捲動時先隱藏翻譯,停下來再顯示(視覺上比較舒服)",
   "skip_names": "略過人名與單字標籤(例如 Bill Gates、Premium)",
   "disk_cache": "把翻譯記在這台電腦,相同文字不再重新送出(明文儲存;關閉時會刪除)",
   "speech_enable": "翻譯語音:把聽到的內容列在畫面下方",
