@@ -53,7 +53,7 @@ def test_live_snapshots_come_while_speaking_and_not_in_silence():
         snap = seg.snapshot()
         if snap is not None:
             shots.append(len(snap) / 16000)
-    assert 3 <= len(shots) <= 6 and shots == sorted(shots)  # roughly one per 0.8 s of speech, each longer than the last
+    assert 2.4 / speech.PARTIAL_STEP <= len(shots) <= 6 / speech.PARTIAL_STEP and shots == sorted(shots)  # about one per step of speech, each longer than the last
     assert seg.snapshot() is None
 
 
