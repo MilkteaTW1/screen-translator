@@ -41,7 +41,7 @@ class SpeechEngine(
         private const val RATE = 16000
         private const val CHUNK = RATE / 10  // 0.1 s
         private const val LIVE_STEP = 0.3  // seconds of new speech between live updates: each new word shows up as soon as the phone has read it
-        private const val LIVE_TRANSLATE_MS = 1000L  // between translations of the sentence being spoken: one request per word got Google to refuse everything
+        private const val FINISH_REUSE_GAP = 0.9  // a live reading this close to the end of the sentence (the quiet that ended it, a step) is taken as the final one
         private const val MAX_BACKLOG = 3  // finished sentences waiting; more are dropped to stay real-time
     }
 
@@ -51,8 +51,6 @@ class SpeechEngine(
     private val translating = Executors.newSingleThreadExecutor()  // translation, beside Whisper so listening never waits for the network
     @Volatile private var backlog = 0
     @Volatile private var liveBusy = false
-    @Volatile private var liveTranslatedAt = 0L
-    @Volatile private var liveOut = "" to -1  // the translation shown beside the words until the next one is made
     @Volatile private var toldTrouble: String? = null
     @Volatile private var sentence = 0  // counts finished sentences: a late live update of an old one is dropped
     private val translators = HashMap<String, Translator>()  // offline translators by spoken language
@@ -143,12 +141,30 @@ class SpeechEngine(
 
     /** A finished sentence: transcribed again in full, and it replaces the live line. */
     private fun finish(audio: FloatArray) {
+        val ended = sentence - 1  // the sentence that just ended (the counter was already moved on)
+        val seconds = audio.size / RATE.toDouble()
+        val live = lastLive
+        if (live.second == ended && live.first.isNotBlank() && lastLiveSeconds >= seconds - FINISH_REUSE_GAP) {
+            // The live reading already heard (nearly) all of it with the same model: reading it all again would only
+            // make the translation come seconds late.
+            val code = lastLiveCode
+            val t0 = SystemClock.uptimeMillis()
+            translating.execute {
+                val out = translate(live.first, code)
+                Log.i(TAG, "speech line: reused the live reading, translated in ${SystemClock.uptimeMillis() - t0} ms")
+                onLine(live.first, out)
+            }
+            onPartial("", "")
+            return
+        }
         if (backlog >= MAX_BACKLOG) return  // the phone can't keep up: skip rather than fall further behind
         backlog++
         val forSentence = sentence
         worker.execute {
             try {
+                val t0 = SystemClock.uptimeMillis()
                 val heard = whisper?.transcribe(normalize(audio), threads, language)
+                Log.i(TAG, "speech line: ${"%.1f".format(seconds)} s of audio read again in ${SystemClock.uptimeMillis() - t0} ms")
                 if (heard != null) {
                     val (code, text) = heard
                     translating.execute { onLine(text, translate(text, code)) }
@@ -162,7 +178,7 @@ class SpeechEngine(
         }
     }
 
-    /** The sentence still being spoken: shown (and translated) right away, replaced when it ends. */
+    /** The sentence still being spoken: its words are shown as soon as they are read; it is translated once, when it ends. */
     private fun live(audio: FloatArray) {
         liveBusy = true
         val forSentence = sentence
@@ -172,18 +188,9 @@ class SpeechEngine(
                 if (heard != null && forSentence == sentence && !stumble(heard.second)) {
                     val (code, text) = heard
                     lastLive = text to forSentence
-                    onPartial(text, if (liveOut.second == forSentence) liveOut.first else "")
-                    val now = SystemClock.uptimeMillis()
-                    if (now - liveTranslatedAt >= LIVE_TRANSLATE_MS) {  // not every new word: that is a request each
-                        liveTranslatedAt = now
-                        translating.execute {
-                            val out = translate(text, code, online = false)  // a local draft: the finished sentence goes to Google once
-                            if (forSentence == sentence && out.isNotEmpty()) {
-                                liveOut = out to forSentence
-                                onPartial(text, out)
-                            }
-                        }
-                    }
+                    lastLiveSeconds = audio.size / RATE.toDouble()
+                    lastLiveCode = code
+                    onPartial(text, "")  // the words only: the sentence is translated once, when it ends
                 }
             } catch (e: Throwable) {
                 Log.w(TAG, "live speech failed: ${e.message}")
@@ -194,6 +201,8 @@ class SpeechEngine(
     }
 
     private var lastLive = "" to -1
+    @Volatile private var lastLiveSeconds = 0.0  // how much audio that reading covered
+    @Volatile private var lastLiveCode = ""
 
     /** A reading far shorter than the last one of this sentence and not a part of it: a stumble; the line shown stays. */
     private fun stumble(text: String): Boolean {
