@@ -13,11 +13,13 @@ class _Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
         assert self.headers["Authorization"] == "Bearer secret"
-        if self.mode == "denied":
+        if self.mode == "old-model" and body["model"] != "new":
+            data, code = json.dumps([{"error": {"message": "models/%s is no longer available to new users." % body["model"]}}]).encode(), 404
+        elif self.mode == "denied":
             data, code = json.dumps({"error": {"message": "API key not valid. Please pass a valid API key."}}).encode(), 400
         else:
             lines = json.loads(body["messages"][0]["content"].split("\n", 1)[1])
-            reply = json.dumps(["譯:" + s for s in lines] if self.mode == "ok" else ["only one"], ensure_ascii=False)
+            reply = json.dumps(["譯:" + s for s in lines] if self.mode in ("ok", "old-model") else ["only one"], ensure_ascii=False)
             data, code = json.dumps({"choices": [{"message": {"content": "```json\n" + reply + "\n```"}}]}).encode(), 200
         self.send_response(code)
         self.send_header("Content-Length", str(len(data)))
@@ -67,3 +69,25 @@ def test_an_answer_with_the_wrong_number_of_lines_is_reported(server):
     tr._argos_many = lambda texts, s, d: [None] * len(texts)
     tr.translate_many(["Hello there my friend", "Another longer line here"], "en", "zh-TW", "en", [], False, False)
     assert "one line for each" in tr.server_error
+
+
+def test_a_model_google_no_longer_gives_out_is_replaced_by_the_next_one(server):
+    _Handler.mode = "old-model"
+    server.update(model="gone", fallbacks=["also-gone", "new"])
+    assert server_translate_group(server, ["Hello there"], "en", "zh-TW") == ["譯:Hello there"]
+    assert server["model"] == "new"  # what worked is asked first from now on
+
+
+def test_a_wrong_key_is_not_retried_with_other_models(server):
+    _Handler.mode = "denied"
+    server.update(fallbacks=["x", "y"])
+    with pytest.raises(OSError, match="valid API key"):
+        server_translate_group(server, ["Hello there"], "en", "zh-TW")
+    assert server["model"] == "m"
+
+
+def test_gemini_asks_a_model_that_is_open_to_new_keys_first():
+    from screen_translator.translator import server_from_settings
+    s = server_from_settings({"server_kind": "gemini", "server_key": "k"})
+    assert s["model"] == "gemini-3.5-flash-lite" and s["fallbacks"]
+    assert not server_from_settings({"server_kind": "gemini", "server_key": "k", "server_model": "mine"})["fallbacks"]

@@ -11,7 +11,10 @@ import java.net.URL
 object GeminiTranslate {
     private const val TAG = "ScreenTranslator"
     const val URL_BASE = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
-    const val MODEL = "gemini-2.5-flash-lite"
+    /** Google retires and restricts models (2.5 ones are now only for past users): the first that works is used, the
+     *  next is tried when Google says a model does not exist, is not open to this key, or its quota is used up. */
+    val MODELS = listOf("gemini-3.5-flash-lite", "gemini-3.6-flash", "gemini-3.1-flash-lite", "gemini-2.5-flash-lite")
+    @Volatile private var working = 0  // index in MODELS of the one that last worked
     const val KEY_PAGE = "https://aistudio.google.com/apikey"
 
     /** Why the last request did not translate (null: it did, or none was made yet). Shown to the user once. */
@@ -52,11 +55,42 @@ object GeminiTranslate {
         return "HTTP $code " + message.trim().take(200)
     }
 
+    /** The refusal is about the model, not about the key: another model may still work. */
+    fun modelUnavailable(code: Int, error: String): Boolean {
+        val low = error.lowercase()
+        if ("api key" in low || "api_key" in low) return false
+        return code in listOf(400, 403, 404, 429)
+    }
+
     /** One translation per text, or nulls for all of them when Gemini could not do it ([lastError] says why). */
-    fun translateMany(key: String, texts: List<String>, target: Lang, model: String = MODEL): List<String?> {
+    fun translateMany(key: String, texts: List<String>, target: Lang, models: List<String> = MODELS): List<String?> {
         if (texts.isEmpty()) return emptyList()
         val none = List<String?>(texts.size) { null }
         if (android.os.SystemClock.uptimeMillis() < retryAt) return none
+        var index = if (models === MODELS) working.coerceIn(0, models.size - 1) else 0
+        var tried = 0
+        while (true) {
+            val result = ask(key, texts, target, models[index])
+            if (result is Ask.Done) {
+                if (models === MODELS) working = index
+                return result.lines
+            }
+            result as Ask.Failed
+            tried++
+            if (!result.modelProblem || tried >= models.size) {
+                retryAt = android.os.SystemClock.uptimeMillis() + result.waitMs
+                return none
+            }
+            index = (index + 1) % models.size
+        }
+    }
+
+    private sealed class Ask {
+        class Done(val lines: List<String?>) : Ask()
+        class Failed(val modelProblem: Boolean, val waitMs: Long) : Ask()
+    }
+
+    private fun ask(key: String, texts: List<String>, target: Lang, model: String): Ask {
         return try {
             val conn = URL(URL_BASE).openConnection() as HttpURLConnection
             conn.requestMethod = "POST"
@@ -72,25 +106,23 @@ object GeminiTranslate {
             val code = conn.responseCode
             if (code != 200) {
                 lastError = errorText(code, (conn.errorStream ?: conn.inputStream).bufferedReader().use { it.readText() })
-                Log.w(TAG, "Gemini: $lastError")
-                retryAt = android.os.SystemClock.uptimeMillis() + if (code == 429) 30_000L else 60_000L
-                return none
+                Log.w(TAG, "Gemini ($model): $lastError")
+                return Ask.Failed(modelUnavailable(code, lastError ?: ""), if (code == 429) 30_000L else 60_000L)
             }
             val answer = JSONObject(conn.inputStream.bufferedReader().use { it.readText() })
             val content = answer.getJSONArray("choices").getJSONObject(0).getJSONObject("message").getString("content")
             val lines = parse(content, texts.size)
             if (lines == null) {
                 lastError = "the answer did not have one line for each text"
-                none
+                Ask.Failed(false, 10_000L)
             } else {
                 lastError = null
-                lines
+                Ask.Done(lines)
             }
         } catch (e: Exception) {
             lastError = "${e.javaClass.simpleName}: ${e.message}"
             Log.w(TAG, "Gemini failed: $lastError")
-            retryAt = android.os.SystemClock.uptimeMillis() + 10_000L
-            none
+            Ask.Failed(false, 10_000L)
         }
     }
 }

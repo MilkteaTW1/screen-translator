@@ -332,7 +332,10 @@ def _server_json(url, payload, key=None, timeout=30):
 
 # Gemini through its OpenAI-compatible address: the user's own key, which is theirs to keep and to be billed (or not) for.
 GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/openai"
-GEMINI_MODEL = "gemini-2.5-flash-lite"
+# Google retires and restricts models (2.5 ones are now only for past users): the first is tried, then the next
+# one when Google says the model does not exist, is not open to this key, or its quota is used up.
+GEMINI_MODELS = ["gemini-3.5-flash-lite", "gemini-3.6-flash", "gemini-3.1-flash-lite", "gemini-2.5-flash-lite"]
+GEMINI_MODEL = GEMINI_MODELS[0]
 
 
 def server_from_settings(s):
@@ -340,8 +343,17 @@ def server_from_settings(s):
     kind, url, key = s.get("server_kind", "off"), s.get("server_url", "").strip(), s.get("server_key", "")
     if kind == "gemini":  # the user's own Gemini key: the address and model are known, the key is theirs
         return {"kind": "openai", "url": GEMINI_URL, "key": key, "model": s.get("server_model", "") or GEMINI_MODEL,
-                "first": True} if key.strip() else None
+                "fallbacks": [] if s.get("server_model", "") else GEMINI_MODELS[1:], "first": True} if key.strip() else None
     return {"kind": kind, "url": url, "key": key, "model": s.get("server_model", "")} if kind != "off" and url else None
+
+
+def model_unavailable(error):
+    """The server's refusal is about the model (unknown, not open to this key, quota used up), not the key itself:
+    another model may still work."""
+    low = error.lower()
+    if "api key" in low or "api_key" in low:
+        return False
+    return error.startswith(("HTTP 404", "HTTP 403", "HTTP 429", "HTTP 400"))
 
 
 def _libre_code(code):
@@ -362,9 +374,19 @@ def server_translate_group(server, texts, src, dst):
     else:
         prompt = (f"Translate each string in this JSON array into {language_name(dst)}. Answer with only a JSON array "
                   f"of the same length, in the same order, nothing else.\n" + json.dumps(lines, ensure_ascii=False))
-        answer = _server_json(base + "/chat/completions", {
-            "model": server.get("model", ""), "temperature": 0, "stream": False,
-            "messages": [{"role": "user", "content": prompt}]}, server.get("key"), timeout=60)
+        answer = None
+        models = [server.get("model", "")] + list(server.get("fallbacks", []))
+        for i, model in enumerate(models):
+            try:
+                answer = _server_json(base + "/chat/completions", {
+                    "model": model, "temperature": 0, "stream": False,
+                    "messages": [{"role": "user", "content": prompt}]}, server.get("key"), timeout=60)
+            except OSError as e:
+                if i == len(models) - 1 or not model_unavailable(str(e)):
+                    raise
+                continue
+            server["model"], server["fallbacks"] = model, [m for m in models if m != model]  # what worked is asked first next time
+            break
         content = answer["choices"][0]["message"]["content"]
         start, end = content.find("["), content.rfind("]")
         out = json.loads(content[start:end + 1])
