@@ -30,7 +30,7 @@ from .speech import MODELS, SpeechWorker, download_model, ensure_streams, find_m
 from . import __version__, i18n, packs, updater
 from .i18n import t
 from .translator import (
-    diagnose,
+    diagnose, server_from_settings,
     DiskCache, LANGUAGES, Translator, argos_code, install_pack, looks_like_source, missing_pairs, needed_pairs, ocr_tag_to_code,
 )
 
@@ -194,9 +194,7 @@ class Worker(QObject):
     def _use_engine(self, s):
         self.translator.google = bool(s.get("use_google", True))
         self.translator.better = s.get("offline_engine") == "better"
-        kind, url = s.get("server_kind", "off"), s.get("server_url", "").strip()
-        self.translator.server = ({"kind": kind, "url": url, "key": s.get("server_key", ""),
-                                   "model": s.get("server_model", "")} if kind != "off" and url else None)
+        self.translator.server = server_from_settings(s)
         if s.get("disk_cache", True):
             self.translator.disk = self.translator.disk or DiskCache(CACHE_PATH)
         else:
@@ -437,6 +435,8 @@ class Worker(QObject):
             return i18n.t("status_packs_needed", names=need)
         if t.server and t.engine == "server":
             return i18n.t("status_running_server")
+        if t.server and t.server_error:  # it is set up but did not answer: say why, or "offline" looks like it was never tried
+            return i18n.t("status_server_error", err=t.server_error[:140])
         if t.offline_error:
             return i18n.t("status_offline_error", err=t.offline_error[:120])
         return i18n.t({"ok": "status_running_google", "limited": "status_google_limited",
@@ -749,7 +749,7 @@ class Panel(QWidget):
             self.offline_engine.addItem("", engine)
         self._select(self.offline_engine, s["offline_engine"])
         self.server_kind = QComboBox()
-        for kind in ("off", "libretranslate", "openai"):
+        for kind in ("off", "gemini", "libretranslate", "openai"):
             self.server_kind.addItem("", kind)
         self._select(self.server_kind, s["server_kind"])
         self.server_url = QLineEdit(s["server_url"])
@@ -844,6 +844,11 @@ class Panel(QWidget):
         self._row(server_form, "server_key", self.server_key)
         self._row(server_form, "server_model", self.server_model)
         box.addLayout(server_form)
+        self.gemini_help = QLabel()  # for the users who do not know where a key comes from: a link and three steps
+        self.gemini_help.setOpenExternalLinks(True)
+        self.gemini_help.setWordWrap(True)
+        self._text(self.gemini_help.setText, "gemini_help")
+        box.addWidget(self.gemini_help)
         lay.addWidget(engine)
         lay.addStretch(1)
         self._tab(quality, "tab_quality")
@@ -902,6 +907,8 @@ class Panel(QWidget):
         self.google.toggled.connect(self.apply)
         self.offline_engine.currentIndexChanged.connect(self._offline_engine_changed)
         self.server_kind.currentIndexChanged.connect(self.apply)
+        self.server_kind.currentIndexChanged.connect(self._show_gemini_help)
+        self._show_gemini_help()
         for w in (self.server_url, self.server_key, self.server_model):
             w.editingFinished.connect(self.apply)
         self.autostart.toggled.connect(self.apply)
@@ -940,6 +947,9 @@ class Panel(QWidget):
         self._text(box.setText, key)
         return box
 
+    def _show_gemini_help(self, *_):
+        self.gemini_help.setVisible(self.server_kind.currentData() == "gemini")
+
     def _row(self, form, key, widget):
         label = QLabel()
         self._text(label.setText, key)
@@ -957,7 +967,7 @@ class Panel(QWidget):
             self.close_action.setItemText(i, t(key))
         for i, key in enumerate(("offline_standard", "offline_better")):
             self.offline_engine.setItemText(i, t(key, mb=better.SIZE_MB))
-        for i, key in enumerate(("server_off", "server_libre", "server_openai")):
+        for i, key in enumerate(("server_off", "server_gemini", "server_libre", "server_openai")):
             self.server_kind.setItemText(i, t(key))
         self.speech_source.setItemText(0, t("audio_system"))
         self.speech_source.setItemText(1, t("audio_mic"))
@@ -1197,10 +1207,11 @@ class Panel(QWidget):
     def run_diagnosis(self):
         """What works and what does not, in one box that can be copied into a bug report."""
         self.diagnose_button.setEnabled(False)
-        target = self.current()["target"]
+        settings = self.current()
+        target = settings["target"]
 
         def work():
-            text = f"Screen Translator {__version__}\n" + diagnose(target)
+            text = f"Screen Translator {__version__}\n" + diagnose(target, settings=settings)
             text += "\nSpeech model (" + self.speech_model.currentData() + "): " + (
                 "installed" if find_model(self.speech_model.currentData()) else "not installed")
             self.diagnosed.emit(text)

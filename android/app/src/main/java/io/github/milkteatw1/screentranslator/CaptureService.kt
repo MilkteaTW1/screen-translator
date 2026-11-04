@@ -800,10 +800,18 @@ class CaptureService : Service() {
     /** Translations of several blocks: Google takes them in one request; whatever it can't do goes offline one by one. */
     private fun translateMany(texts: List<String>): List<String?> {
         val todo = texts.filter { cache[it] == null && recall(it) == null }
-        if (prefs.useGoogle && todo.size > 1) {
+        if ((prefs.useGoogle || prefs.geminiKey.isNotBlank()) && todo.isNotEmpty()) {
             val prepared = todo.map { it to TextRules.protect(it, glossary, src.script == Script.LATIN, src.code) }
                 .filter { (_, p) -> !TextRules.onlyPlaceholders(p.first) }
-            GoogleTranslate.translateMany(prepared.map { it.second.first }, tgt).forEachIndexed { i, out ->
+            val protectedTexts = prepared.map { it.second.first }
+            // the user's own Gemini key first, then Google for what Gemini did not do
+            var outs: List<String?> = if (prefs.geminiKey.isNotBlank()) askGemini(protectedTexts) else List(prepared.size) { null }
+            if (prefs.useGoogle && prepared.size > 1 && outs.any { it == null }) {
+                val rest = outs.indices.filter { outs[it] == null }
+                val google = GoogleTranslate.translateMany(rest.map { protectedTexts[it] }, tgt)
+                outs = outs.toMutableList().also { m -> rest.forEachIndexed { j, i -> m[i] = google[j] } }
+            }
+            outs.forEachIndexed { i, out ->
                 if (out != null) finish(prepared[i].first, out, prepared[i].second.second, fromGoogle = true)
             }
         }
@@ -818,7 +826,8 @@ class CaptureService : Service() {
             cache[text] = ""
             return null
         }
-        val google = if (prefs.useGoogle) GoogleTranslate.translate(protectedText, tgt) else null
+        val gemini = if (prefs.geminiKey.isNotBlank()) askGemini(listOf(protectedText))[0] else null
+        val google = gemini ?: if (prefs.useGoogle) GoogleTranslate.translate(protectedText, tgt) else null
         val out = google ?: try {
             Tasks.await(translator!!.translate(protectedText), 20, TimeUnit.SECONDS)
         } catch (e: Exception) {
@@ -827,6 +836,19 @@ class CaptureService : Service() {
             return null  // e.g. the language data is not downloaded yet: don't cache
         }
         return finish(text, out, originals, fromGoogle = google != null)
+    }
+
+    @Volatile private var toldGemini: String? = null
+
+    /** Gemini with the user's key. When it fails the user is told why, once for each reason: otherwise "offline" is all they see. */
+    private fun askGemini(texts: List<String>): List<String?> {
+        val outs = GeminiTranslate.translateMany(prefs.geminiKey, texts, tgt)
+        val error = GeminiTranslate.lastError
+        if (outs.all { it == null } && error != null && error != toldGemini) {
+            toldGemini = error
+            main.post { android.widget.Toast.makeText(this, getString(R.string.gemini_failed, error), android.widget.Toast.LENGTH_LONG).show() }
+        } else if (error == null) toldGemini = null
+        return outs
     }
 
     /** Text was read but nothing could translate it: tell the user once why (again only after it worked in between). */

@@ -12,6 +12,11 @@
     <string name="problem_refused">Text was read but not translated: Google is refusing requests from this phone for now, and the offline model is not available. Download the language in the app, or wait.</string>
     <string name="problem_network">Text was read but not translated: cannot reach Google (check the internet), and the offline model is not available.</string>
     <string name="problem_offline">Text was read but not translated: the offline translation failed. %1$s</string>
+    <string name="section_gemini">Gemini (your own key)</string>
+    <string name="gemini_key_label">Gemini API key (tried before Google; leave empty to not use it)</string>
+    <string name="gemini_steps">Where to get one: 1) tap the button below and sign in with a Google account, 2) tap "Create API key", 3) copy the key and paste it above. It is free to start. The text goes to Google under your key.</string>
+    <string name="gemini_get_key">Get a free key</string>
+    <string name="gemini_failed">Gemini did not translate, so Google or offline is used: %1$s</string>
     <string name="use_google">Use Google Translate first (sends the text to Google; offline translation is the backup)</string>
     <string name="what_to_translate">What to translate</string>
     <string name="screen_text">Text on the screen</string>

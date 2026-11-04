@@ -4,6 +4,7 @@ import http.client
 import re
 import threading
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 import zlib
@@ -312,8 +313,35 @@ def _server_json(url, payload, key=None, timeout=30):
     if key:
         headers["Authorization"] = "Bearer " + key
     req = urllib.request.Request(url, json.dumps(payload).encode("utf-8"), headers)
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        return json.loads(resp.read())
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return json.loads(resp.read())
+    except urllib.error.HTTPError as e:  # the server says why (wrong key, unknown model, quota): that is what the user needs to read
+        try:
+            said = e.read().decode("utf-8", "replace")
+        except Exception:
+            said = ""
+        try:  # most servers wrap it as {"error": {"message": ...}} (Gemini: in a list)
+            data = json.loads(said)
+            data = data[0] if isinstance(data, list) and data else data
+            said = str(data["error"]["message"])
+        except Exception:
+            pass
+        raise OSError(f"HTTP {e.code} {said.strip()[:200]}") from None
+
+
+# Gemini through its OpenAI-compatible address: the user's own key, which is theirs to keep and to be billed (or not) for.
+GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/openai"
+GEMINI_MODEL = "gemini-2.5-flash-lite"
+
+
+def server_from_settings(s):
+    """The own-server setting as the translator wants it ({kind, url, key, model, first}), or None when there is none."""
+    kind, url, key = s.get("server_kind", "off"), s.get("server_url", "").strip(), s.get("server_key", "")
+    if kind == "gemini":  # the user's own Gemini key: the address and model are known, the key is theirs
+        return {"kind": "openai", "url": GEMINI_URL, "key": key, "model": s.get("server_model", "") or GEMINI_MODEL,
+                "first": True} if key.strip() else None
+    return {"kind": kind, "url": url, "key": key, "model": s.get("server_model", "")} if kind != "off" and url else None
 
 
 def _libre_code(code):
@@ -419,6 +447,7 @@ class Translator:
         self.disk = None  # a DiskCache, if translations are to be remembered
         self.server = None  # {"kind", "url", "key", "model"}: the user's own server, tried after Google, before offline
         self._server_down = 0.0
+        self.server_error = None  # why the user's own server (Gemini) did not translate, if it did not
         self.unserved = False  # the last batch left some text without any translation
         self.google_error = None  # why the last Google request failed (None: it did not, or was not tried)
         self.offline_error = None  # why the offline engine failed, if it threw (a missing pack is not an error)
@@ -508,13 +537,17 @@ class Translator:
             group = items[start:start + 8]
             try:
                 lines = server_translate_group(self.server, [g[2] for g in group], src, dst)
-            except Exception:
+                if lines is None:
+                    self.server_error = "the answer did not have one line for each text"
+            except Exception as e:
                 lines = None
+                self.server_error = f"{type(e).__name__}: {e}"
             if lines is None:
                 break  # down, or answering nonsense: the rest goes offline rather than waiting on it again
             done.update({g[0]: out for g, out in zip(group, lines) if out})
         if done:
             self._server_fails = 0
+            self.server_error = None
         else:
             self._server_fails += 1
             self._server_down = time.monotonic() + min(60.0, 10.0 * self._server_fails)
@@ -587,13 +620,21 @@ class Translator:
                 continue
             todo.append((i, text, protected, originals))
         outs = {}
-        if self.google and online:  # online=False: a quick local draft (the sentence being spoken), no request to anyone
-            outs = self._google_many(todo, src, dst)
+        first = bool(self.server and self.server.get("first") and online)  # the user's own Gemini key goes before Google
+        if first:
+            outs = self._server_many(todo, src, dst)
             if outs:
+                self.engine = "server"
+        from_google = set()
+        if self.google and online:  # online=False: a quick local draft (the sentence being spoken), no request to anyone
+            pending = [item for item in todo if not outs.get(item[0])]
+            got = self._google_many(pending, src, dst) if pending else {}
+            if got:
+                outs.update(got)
                 self.engine = "google"
-        from_google = {i for i, out in outs.items() if out}
+            from_google = {i for i, out in got.items() if out}
         rest = [item for item in todo if not outs.get(item[0])]
-        if rest and self.server and online:
+        if rest and self.server and online and not first:
             more = self._server_many(rest, src, dst)
             if more:
                 outs.update(more)
@@ -626,7 +667,7 @@ class Translator:
         return results
 
 
-def diagnose(dst, src="en"):
+def diagnose(dst, src="en", settings=None):
     """Plain text saying what works: Google, the offline engine, the packs on disk. For the "test translation" button
     and for bug reports: the app otherwise keeps quiet about why a translation did not come."""
     lines = []
@@ -636,6 +677,15 @@ def diagnose(dst, src="en"):
         lines.append(f"Google: refused ({e}) - it does not want to answer this computer for now")
     except Exception as e:
         lines.append(f"Google: failed ({type(e).__name__}: {e})")
+    cfg = server_from_settings(settings) if settings else None
+    if cfg:
+        try:
+            out = server_translate_group(cfg, ["Hello world."], src, dst)
+            lines.append(f"Own server/Gemini: OK ({out[0]})" if out else "Own server/Gemini: answered, but not one line per text")
+        except Exception as e:
+            lines.append(f"Own server/Gemini: failed ({type(e).__name__}: {e})")
+    elif settings and settings.get("server_kind") == "gemini":
+        lines.append("Own server/Gemini: no API key entered")
     missing = missing_pairs(src, dst)
     lines.append(f"Better offline model ({better.NAME}): " + ("downloaded" if better.installed() else "not downloaded"))
     if missing:

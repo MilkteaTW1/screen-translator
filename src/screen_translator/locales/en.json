@@ -27,11 +27,12 @@
   "group_engine": "Translation engine",
   "server_kind": "Own server (used when Google can't)",
   "server_off": "None",
+  "server_gemini": "Gemini (your own key, tried before Google)",
   "server_libre": "LibreTranslate",
   "server_openai": "OpenAI-compatible (Ollama, LM Studio)",
   "server_url": "Server address",
-  "server_key": "API key (optional)",
-  "server_model": "Model (OpenAI-compatible only)",
+  "server_key": "API key (Gemini: get one free at aistudio.google.com/apikey; the text is sent to Google under your key)",
+  "server_model": "Model (Gemini or OpenAI-compatible; empty = default)",
   "status_running_server": "Running (your own translation server)",
   "google_enable": "Use Google Translate first (sends the text to Google; the offline engine is the backup)",
   "group_startup": "Startup",
@@ -123,5 +124,7 @@
   "better_text": "This uses a larger language model (Qwen2.5 1.5B) that translates more naturally and handles idioms and words with several meanings, but it is a {mb} MB download, uses more memory and is slower than the standard packs. It runs on your computer. Download it now?",
   "better_downloading": "Downloading the better offline model...",
   "better_progress": "Downloading the better offline model... {pct}%",
-  "better_ready": "The better offline model is ready."
+  "better_ready": "The better offline model is ready.",
+  "status_server_error": "Your own server/Gemini did not answer, so another engine is used: {err}",
+  "gemini_help": "Where to get a Gemini key: 1) open <a href=\"https://aistudio.google.com/apikey\">aistudio.google.com/apikey</a> and sign in with a Google account, 2) click \"Create API key\", 3) copy the key and paste it into the API key box above. It is free to start. The text goes to Google under your key."
 }

@@ -26,6 +26,11 @@ class Prefs(context: Context) {
         get() = sp.getBoolean("useGoogle", true)
         set(v) = sp.edit().putBoolean("useGoogle", v).apply()
 
+    /** The user's own Gemini API key (empty: not used). Gemini is asked before Google. */
+    var geminiKey: String
+        get() = sp.getString("geminiKey", "") ?: ""
+        set(v) = sp.edit().putString("geminiKey", v.trim()).apply()
+
     /** Keep Google's translations on the phone, so the same text is not sent again. */
     var rememberTranslations: Boolean
         get() = sp.getBoolean("rememberTranslations", true)
