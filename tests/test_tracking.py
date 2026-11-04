@@ -76,3 +76,22 @@ def test_a_carried_box_next_to_its_fresh_twin_is_a_duplicate():
     other = {"x": 40, "y": 400, "w": 300, "h": 30, "text": "Something else entirely"}
     assert _duplicate(carried, fresh)
     assert not _duplicate(other, fresh)
+
+
+def test_rows_that_repeat_do_not_fool_the_shift_when_the_scroll_speed_says_which_one():
+    img = Image.new("L", (960, 1200), 255)
+    d = ImageDraw.Draw(img)
+    f = ImageFont.truetype("arial.ttf", 22)
+    for i in range(30):  # the same row again and again, 38 px apart
+        d.text((40, 20 + 38 * i), "Same item, same text, same row", font=f, fill=0)
+    full = np.asarray(img, np.uint8)
+    prev, cur = full[0:540].copy(), full[76:616].copy()  # scrolled by two rows
+    for hint, want in (((0, -76.0), (0, -76)), ((0, -38.0), (0, -38))):
+        t = {"x": 40, "y": 200, "w": 400, "h": 30}
+        assert tracking.follow([t], prev, cur, hint=hint) == want, hint
+
+
+def test_a_wrong_hint_does_not_beat_what_the_pictures_show():
+    prev, cur = page(100), page(160)
+    t = block(8, 100)
+    assert tracking.follow([t], prev, cur, hint=(0, -20.0)) == (0, -60)

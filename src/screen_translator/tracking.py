@@ -21,8 +21,9 @@ def shrink(gray, k=COARSE):
     return gray[:h // k * k, :w // k * k].astype(np.float32).reshape(h // k, k, w // k, k).mean(axis=(1, 3))
 
 
-def estimate_shift(prev, cur):
-    """(dx, dy, peak): how far the content of `prev` moved to become `cur`, in pixels of these 2-D arrays."""
+def estimate_shifts(prev, cur, n=4):
+    """The n strongest candidates [(dx, dy, peak), ...], best first: how far the content of `prev` may have moved to
+    become `cur`, in pixels of these 2-D arrays. Rows that repeat (a list, a table) give several equally good ones."""
     h, w = prev.shape
     window = np.outer(np.hanning(h), np.hanning(w)).astype(np.float32)
     a = np.fft.rfft2((prev - prev.mean()) * window)
@@ -30,10 +31,17 @@ def estimate_shift(prev, cur):
     cross = a.conj() * b
     cross /= np.abs(cross) + 1e-6
     corr = np.fft.irfft2(cross, s=prev.shape)
-    iy, ix = np.unravel_index(int(np.argmax(corr)), corr.shape)
-    dy = iy if iy <= h // 2 else iy - h
-    dx = ix if ix <= w // 2 else ix - w
-    return int(dx), int(dy), float(corr[iy, ix])
+    found = []
+    for _ in range(n):
+        iy, ix = np.unravel_index(int(np.argmax(corr)), corr.shape)
+        found.append((int(ix if ix <= w // 2 else ix - w), int(iy if iy <= h // 2 else iy - h), float(corr[iy, ix])))
+        corr[np.ix_([(iy + d) % h for d in range(-2, 3)], [(ix + d) % w for d in range(-2, 3)])] = -1.0  # next peak
+    return found
+
+
+def estimate_shift(prev, cur):
+    """(dx, dy, peak): the strongest candidate of estimate_shifts."""
+    return estimate_shifts(prev, cur, 1)[0]
 
 
 def _error(prev, cur, box, dx, dy):
@@ -81,12 +89,13 @@ def _refine(tracks, prev, cur, dx, dy):
     return best_dx, best_dy, cost(best_dx, best_dy)
 
 
-def follow(tracks, prev, cur, ignore=()):
+def follow(tracks, prev, cur, ignore=(), hint=None):
     """Move each track (dicts with x, y, w, h in screen pixels) with the content it sits on. `prev` and `cur` are
     consecutive full-size grayscale screenshots (2-D uint8); `ignore` are boxes (x0, y0, x1, y1) that are our own
     drawing, which stays put while the page scrolls and would hide the shift. Returns the (dx, dy) the picture
     shifted by, (0, 0) if it moved too little to measure yet, or None when it did not simply shift (a page change,
-    a video)."""
+    a video). `hint` is the shift the scroll speed predicts (dx, dy): when rows repeat and several shifts fit the
+    pictures equally well, the one that continues the scroll is taken."""
     if not tracks or prev.shape != cur.shape:
         return None
     small_prev, small_cur = shrink(prev), shrink(cur)
@@ -94,12 +103,29 @@ def follow(tracks, prev, cur, ignore=()):
         area = (slice(max(0, int(y0) // COARSE), max(0, int(y1) // COARSE + 1)),
                 slice(max(0, int(x0) // COARSE), max(0, int(x1) // COARSE + 1)))
         small_prev[area], small_cur[area] = small_prev.mean(), small_cur.mean()
-    dx, dy, peak = estimate_shift(small_prev, small_cur)
+    found = estimate_shifts(small_prev, small_cur)
+    dx, dy, peak = found[0]
     if peak < MIN_PEAK:
         return None
-    if dx == 0 and dy == 0:
+    moving = hint is not None and max(abs(hint[0]), abs(hint[1])) >= COARSE  # it was scrolling a moment ago
+    if dx == 0 and dy == 0 and not moving:
         return 0, 0
-    dx, dy, fit = _refine(tracks, prev, cur, dx * COARSE, dy * COARSE)
+    options = [c for c in found if c[2] >= max(MIN_PEAK, 0.6 * peak) and (moving or c[:2] != (0, 0))]
+    if moving:
+        guess = (round(hint[0] / COARSE), round(hint[1] / COARSE))
+        if all(max(abs(c[0] - guess[0]), abs(c[1] - guess[1])) > 1 for c in options):
+            options.append((*guess, 0.0))  # the scroll's own speed says where to look too
+    best = None
+    for index, (cx, cy, _) in enumerate(options):
+        rx, ry, fit = _refine(tracks, prev, cur, cx * COARSE, cy * COARSE)
+        score = (fit if fit is not None else 0.0) + 0.5 * index
+        if hint is not None:
+            score += 0.02 * (abs(rx - hint[0]) + abs(ry - hint[1]))
+        if best is None or score < best[0]:
+            best = (score, rx, ry, fit)
+    _, dx, dy, fit = best
+    if dx == 0 and dy == 0:
+        return 0, 0  # it did not move after all (the pictures only look alike)
     if abs(dy) > MAX_SHIFT * prev.shape[0] or abs(dx) > MAX_SHIFT * prev.shape[1]:
         return None  # too far to be one scroll step: repeating text or a page change fooled the measurement
     if fit is not None and fit > MAX_PROBE_ERROR:

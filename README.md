@@ -51,6 +51,7 @@ Translation goes to Google by default (the text is sent to Google); turn it off 
 Optionally set your own server (Quality tab: LibreTranslate, or an OpenAI-compatible one such as Ollama or LM Studio). It is used when Google cannot be, before the offline model. The text goes only to that address; the API key is saved in `settings.json` as plain text.
 The app downloads no model for this; it is for people who already run a server. If you set one up just for this, a small model (around 1 GB, such as a 1-2B instruct model) is enough for short lines.
 When a translation has to be laid over its text, it is painted in the page's own colour so it reads as the text replaced; the round button hides the covers to show the original.
+A setting (off by default) hides all translations while the page scrolls and shows them when it stops, which some people find easier on the eyes.
 Google's translations are remembered in `%APPDATA%\ScreenTranslator\translations.jsonl` so the same text is not sent again. That file is plain text and holds what was on your screen; turn the option off in the settings and it is deleted.
 
 ## Android
@@ -169,6 +170,7 @@ MIT
 可在「品質」分頁設定自己的伺服器(LibreTranslate,或 Ollama、LM Studio 這類 OpenAI 相容的),Google 不能用時先用它,再退回離線模型。文字只會送到你填的位址;API 金鑰以明文存在 `settings.json`。
 程式不會為此下載任何模型,這是給本來就有在跑伺服器的人用的。如果要特地架一個,小模型(約 1 GB,例如 1~2B 的 instruct 模型)翻短句就夠了。
 翻譯框必須蓋在原文上時,會用該處頁面的底色,看起來像原文被換掉;小圓鈕可一鍵隱藏覆蓋、看原文。
+有個設定(預設關閉)可在頁面捲動時先隱藏所有翻譯,停下來再顯示,有些人覺得這樣視覺上比較舒服。
 Google 的翻譯會記在 `%APPDATA%\ScreenTranslator\translations.jsonl`,相同文字不會重新送出。這個檔案是明文,內容就是你螢幕上出現過的文字;在設定中關閉這個選項就會刪除。
 
 ## Android 手機版
