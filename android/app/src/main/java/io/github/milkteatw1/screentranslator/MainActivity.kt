@@ -179,6 +179,8 @@ class MainActivity : ComponentActivity() {
         speed.addView(Ui.label(ctx, getString(R.string.refresh_interval)))
         val interval = Ui.field(ctx, (prefs.intervalMs / 1000.0).toString(), number = true)
         speed.addView(interval)
+        val hideOnScroll = Ui.switch(ctx, getString(R.string.hide_on_scroll), prefs.hideOnScroll)
+        speed.addView(hideOnScroll)
         pages[2].addView(speed)
 
         // General: interface language, version and updates.
@@ -231,13 +233,14 @@ class MainActivity : ComponentActivity() {
             prefs.skipNames = skip.isChecked
             prefs.useGoogle = google.isChecked
             prefs.rememberTranslations = remember.isChecked
+            prefs.hideOnScroll = hideOnScroll.isChecked
             if (!remember.isChecked) TranslationMemory(TranslationMemory.fileIn(ctx)).clear()  // off means forgotten
             prefs.glossary = glossary.text.toString()
             prefs.speechMic = soundSource.selectedItemPosition == 1
             prefs.spokenLanguage = spokenCodes[speechLang.selectedItemPosition]
             prefs.speechModel = WhisperModel.models[modelChoice.selectedItemPosition].name
         }
-        for (s in listOf(google, remember, skip)) s.setOnCheckedChangeListener { _, _ -> save() }
+        for (s in listOf(google, remember, skip, hideOnScroll)) s.setOnCheckedChangeListener { _, _ -> save() }
         val saveOnPick = object : AdapterView.OnItemSelectedListener {
             var first = 2
             override fun onItemSelected(p: AdapterView<*>?, v: View?, pos: Int, id: Long) {

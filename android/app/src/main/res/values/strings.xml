@@ -8,6 +8,7 @@
     <string name="skip_names">Skip names and one-word labels</string>
     <string name="glossary_label">Never translate these (one per line), or choose a translation: thread = 執行緒</string>
     <string name="remember_translations">Remember translations on this phone, so the same text is not sent again (turning this off deletes them)</string>
+    <string name="hide_on_scroll">Hide translations while the page scrolls, show them when it stops (easier on the eyes)</string>
     <string name="use_google">Use Google Translate first (sends the text to Google; offline translation is the backup)</string>
     <string name="what_to_translate">What to translate</string>
     <string name="screen_text">Text on the screen</string>

@@ -31,6 +31,11 @@ class Prefs(context: Context) {
         get() = sp.getBoolean("rememberTranslations", true)
         set(v) = sp.edit().putBoolean("rememberTranslations", v).apply()
 
+    /** Draw no translations while the page scrolls; they come back when it stops. */
+    var hideOnScroll: Boolean
+        get() = sp.getBoolean("hideOnScroll", false)
+        set(v) = sp.edit().putBoolean("hideOnScroll", v).apply()
+
     var screenText: Boolean
         get() = sp.getBoolean("screenText", true)
         set(v) = sp.edit().putBoolean("screenText", v).apply()
