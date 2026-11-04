@@ -316,6 +316,20 @@ def _server_json(url, payload, key=None, timeout=30):
         return json.loads(resp.read())
 
 
+# Gemini through its OpenAI-compatible address: the user's own key, which is theirs to keep and to be billed (or not) for.
+GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/openai"
+GEMINI_MODEL = "gemini-2.5-flash-lite"
+
+
+def server_from_settings(s):
+    """The own-server setting as the translator wants it ({kind, url, key, model, first}), or None when there is none."""
+    kind, url, key = s.get("server_kind", "off"), s.get("server_url", "").strip(), s.get("server_key", "")
+    if kind == "gemini":  # the user's own Gemini key: the address and model are known, the key is theirs
+        return {"kind": "openai", "url": GEMINI_URL, "key": key, "model": s.get("server_model", "") or GEMINI_MODEL,
+                "first": True} if key.strip() else None
+    return {"kind": kind, "url": url, "key": key, "model": s.get("server_model", "")} if kind != "off" and url else None
+
+
 def _libre_code(code):
     return {"zh-CN": "zh", "zh-TW": "zt"}.get(code, code.split("-")[0])
 
@@ -587,13 +601,21 @@ class Translator:
                 continue
             todo.append((i, text, protected, originals))
         outs = {}
-        if self.google and online:  # online=False: a quick local draft (the sentence being spoken), no request to anyone
-            outs = self._google_many(todo, src, dst)
+        first = bool(self.server and self.server.get("first") and online)  # the user's own Gemini key goes before Google
+        if first:
+            outs = self._server_many(todo, src, dst)
             if outs:
+                self.engine = "server"
+        from_google = set()
+        if self.google and online:  # online=False: a quick local draft (the sentence being spoken), no request to anyone
+            pending = [item for item in todo if not outs.get(item[0])]
+            got = self._google_many(pending, src, dst) if pending else {}
+            if got:
+                outs.update(got)
                 self.engine = "google"
-        from_google = {i for i, out in outs.items() if out}
+            from_google = {i for i, out in got.items() if out}
         rest = [item for item in todo if not outs.get(item[0])]
-        if rest and self.server and online:
+        if rest and self.server and online and not first:
             more = self._server_many(rest, src, dst)
             if more:
                 outs.update(more)

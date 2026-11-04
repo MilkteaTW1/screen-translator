@@ -456,3 +456,24 @@ def test_a_draft_asks_nobody_and_is_not_remembered(monkeypatch):
     out = tr.translate("hello there friend", "en", "zh-TW", "en", [], False, False, online=False)
     assert out == "譯:hello there friend" and not calls
     assert ("hello there friend", "en", "zh-TW") not in tr.cache
+
+
+def test_a_gemini_key_makes_a_server_that_is_asked_before_google():
+    from screen_translator.translator import GEMINI_MODEL, GEMINI_URL, server_from_settings
+    s = server_from_settings({"server_kind": "gemini", "server_key": " abc "})
+    assert s["kind"] == "openai" and s["url"] == GEMINI_URL and s["model"] == GEMINI_MODEL and s["first"]
+    assert server_from_settings({"server_kind": "gemini", "server_key": " "}) is None  # no key, no server
+    assert server_from_settings({"server_kind": "off", "server_url": "http://x"}) is None
+    own = server_from_settings({"server_kind": "openai", "server_url": "http://localhost:11434/v1", "server_model": "m"})
+    assert own["kind"] == "openai" and not own.get("first")
+
+
+def test_the_server_marked_first_answers_before_google(monkeypatch):
+    tr = Translator()
+    tr.google = True
+    tr.server = {"kind": "openai", "url": "u", "key": "k", "model": "m", "first": True}
+    asked = []
+    monkeypatch.setattr(tr, "_server_many", lambda items, s, d: asked.append("server") or {i[0]: "譯" for i in items})
+    monkeypatch.setattr(tr, "_google_many", lambda items, s, d: asked.append("google") or {})
+    assert tr.translate("hello there friend", "en", "zh-TW", "en", [], False, False) == "譯"
+    assert asked == ["server"]  # Google is not even asked: the server answered everything

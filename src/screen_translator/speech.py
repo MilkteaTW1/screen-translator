@@ -14,7 +14,7 @@ import numpy as np
 from PySide6.QtCore import QObject, Signal
 
 from .i18n import t
-from .translator import Translator
+from .translator import Translator, server_from_settings
 
 SAMPLE_RATE = 16000
 CHUNK = 1600  # 0.1 s of audio per read
@@ -181,6 +181,7 @@ class SpeechWorker(QObject):
         self.settings = settings
         self.translator.google = bool(settings.get("use_google", True))
         self.translator.better = settings.get("offline_engine") == "better"
+        self.translator.server = server_from_settings(settings)
         self.translator.clear()
 
     def start(self):

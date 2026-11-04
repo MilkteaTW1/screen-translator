@@ -30,7 +30,7 @@ from .speech import MODELS, SpeechWorker, download_model, ensure_streams, find_m
 from . import __version__, i18n, packs, updater
 from .i18n import t
 from .translator import (
-    diagnose,
+    diagnose, server_from_settings,
     DiskCache, LANGUAGES, Translator, argos_code, install_pack, looks_like_source, missing_pairs, needed_pairs, ocr_tag_to_code,
 )
 
@@ -194,9 +194,7 @@ class Worker(QObject):
     def _use_engine(self, s):
         self.translator.google = bool(s.get("use_google", True))
         self.translator.better = s.get("offline_engine") == "better"
-        kind, url = s.get("server_kind", "off"), s.get("server_url", "").strip()
-        self.translator.server = ({"kind": kind, "url": url, "key": s.get("server_key", ""),
-                                   "model": s.get("server_model", "")} if kind != "off" and url else None)
+        self.translator.server = server_from_settings(s)
         if s.get("disk_cache", True):
             self.translator.disk = self.translator.disk or DiskCache(CACHE_PATH)
         else:
@@ -749,7 +747,7 @@ class Panel(QWidget):
             self.offline_engine.addItem("", engine)
         self._select(self.offline_engine, s["offline_engine"])
         self.server_kind = QComboBox()
-        for kind in ("off", "libretranslate", "openai"):
+        for kind in ("off", "gemini", "libretranslate", "openai"):
             self.server_kind.addItem("", kind)
         self._select(self.server_kind, s["server_kind"])
         self.server_url = QLineEdit(s["server_url"])
@@ -957,7 +955,7 @@ class Panel(QWidget):
             self.close_action.setItemText(i, t(key))
         for i, key in enumerate(("offline_standard", "offline_better")):
             self.offline_engine.setItemText(i, t(key, mb=better.SIZE_MB))
-        for i, key in enumerate(("server_off", "server_libre", "server_openai")):
+        for i, key in enumerate(("server_off", "server_gemini", "server_libre", "server_openai")):
             self.server_kind.setItemText(i, t(key))
         self.speech_source.setItemText(0, t("audio_system"))
         self.speech_source.setItemText(1, t("audio_mic"))
