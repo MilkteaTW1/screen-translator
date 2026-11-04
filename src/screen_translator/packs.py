@@ -20,7 +20,31 @@ SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?。！？])\s+|(?<=[。！？])")
 THREADS = max(2, min(4, (os.cpu_count() or 4) // 2 - 1))  # CPU threads one translation may use: few, so the app stays light
 BEAM = 2
 
+CLAUSE_SPLIT_RE = re.compile(r"(?<=[,;:])\s+")
+CUT_OFF_RE = re.compile(r"[,，、;；:：]\s*$")
+
 _models = {}
+
+
+CJK = "぀-ヿ㐀-鿿"
+_PUNCT = {",": "，", ";": "；", ":": "：", "?": "？", "!": "！"}
+
+
+def tidy_chinese(text):
+    """Chinese written with Western punctuation and spaces between characters ("你好, 世界 ."): use Chinese ones."""
+    text = re.sub(rf"(?<=[{CJK}])\s*([,;:?!])(?=\s|$|[{CJK}])\s*", lambda m: _PUNCT[m.group(1)], text)
+    text = re.sub(rf"(?<=[{CJK}])\s*\.(?=\s*$)", "。", text)
+    text = re.sub(rf"(?<=[{CJK}])\s+(?=[{CJK}])", "", text)
+    return text
+
+
+def traditional(text):
+    """The Chinese pack for Traditional sometimes writes Simplified characters ("新闻"): make them Traditional (Taiwan wording)."""
+    try:
+        import zhconv
+        return zhconv.convert(text, "zh-tw")
+    except Exception:
+        return text
 
 
 def _pack_dirs():
@@ -55,15 +79,8 @@ def _load(pair):
     return _models[pair]
 
 
-def translate_many(texts, src, dst):
-    """Translate blocks of text with the (src, dst) pack. All their sentences go through the engine in ONE
-    call: the engine is much faster that way than one call per block."""
-    translator, sp, prefix = _load((src, dst))
-    split = [[s for s in SENTENCE_SPLIT_RE.split(t.strip()) if s.strip()] for t in texts]
-    flat = [s for sentences in split for s in sentences]
-    if not flat:
-        return [""] * len(texts)
-    tokens = [sp.encode(s, out_type=str) for s in flat]
+def _run(translator, sp, prefix, sentences):
+    tokens = [sp.encode(s, out_type=str) for s in sentences]
     out = translator.translate_batch(
         tokens, target_prefix=[[prefix]] * len(tokens) if prefix else None, replace_unknowns=True,
         beam_size=BEAM, length_penalty=0.2, max_batch_size=1024, batch_type="tokens")
@@ -73,6 +90,32 @@ def translate_many(texts, src, dst):
         if prefix and value.startswith(prefix):
             value = value[len(prefix):]
         decoded.append(value.strip())
+    return decoded
+
+
+def translate_many(texts, src, dst):
+    """Translate blocks of text with the (src, dst) pack. All their sentences go through the engine in ONE
+    call: the engine is much faster that way than one call per block."""
+    translator, sp, prefix = _load((src, dst))
+    split = [[s for s in SENTENCE_SPLIT_RE.split(t.strip()) if s.strip()] for t in texts]
+    flat = [s for sentences in split for s in sentences]
+    if not flat:
+        return [""] * len(texts)
+    decoded = _run(translator, sp, prefix, flat)
+    # The engine sometimes stops at a comma and drops the rest of the sentence: translate such sentences clause by clause.
+    cut = [i for i, d in enumerate(decoded) if CUT_OFF_RE.search(d) and not CUT_OFF_RE.search(flat[i])]
+    if cut:
+        clauses = [[c for c in CLAUSE_SPLIT_RE.split(flat[i]) if c.strip()] for i in cut]
+        done = _run(translator, sp, prefix, [c for cs in clauses for c in cs])
+        k = 0
+        for i, cs in zip(cut, clauses):
+            pieces = [p.strip("，, ") for p in done[k:k + len(cs)]]
+            k += len(cs)
+            decoded[i] = "，".join(p for p in pieces if p) if dst in ("zt", "zh") else ", ".join(p for p in pieces if p)
+    if dst in ("zt", "zh"):
+        decoded = [tidy_chinese(d) for d in decoded]
+    if dst == "zt":
+        decoded = [traditional(d) for d in decoded]
     results, i = [], 0
     for sentences in split:
         pieces = decoded[i:i + len(sentences)]
