@@ -30,6 +30,7 @@ from .speech import MODELS, SpeechWorker, download_model, ensure_streams, find_m
 from . import __version__, i18n, packs, updater
 from .i18n import t
 from .translator import (
+    diagnose,
     DiskCache, LANGUAGES, Translator, argos_code, install_pack, looks_like_source, missing_pairs, needed_pairs, ocr_tag_to_code,
 )
 
@@ -38,7 +39,7 @@ CACHE_PATH = SETTINGS_PATH.with_name("translations.jsonl")
 DEFAULTS = {
     "source": "en-US", "target": "zh-TW", "interval": 1.0,
     "auto_proper": True, "keep_katakana": False, "glossary": "",
-    "hide_from_capture": True, "skip_names": True, "disk_cache": True, "hide_on_scroll": False,
+    "hide_from_capture": True, "skip_names": True, "disk_cache": True, "hide_on_scroll": False, "close_action": "ask",
     "autostart": False, "start_on_launch": False,
     "speech_enabled": False, "speech_source": "system", "speech_model": "base", "speech_lang": "auto",
     "use_google": True,
@@ -140,6 +141,7 @@ def _grows(old, new):
 class Worker(QObject):
     results = Signal(list)
     status = Signal(str)
+    problem = Signal(str)  # one sentence, once per kind of trouble: text was read but could not be translated
     background = Signal(tuple)
     motion = Signal(float, float)  # scroll velocity (px/s) so the overlay can keep boxes moving between scans
 
@@ -157,6 +159,7 @@ class Worker(QObject):
         self._jobs_lock = threading.Lock()
         self._jobs_ready = threading.Event()
         self.shown = set()  # translations currently on screen, whitespace-stripped
+        self._reported = None  # the kind of trouble the user was already told about
         self.tracks = []  # text blocks followed from scan to scan: position, text, translation, times seen
         self._others = []  # (x, y, w, h, line height) of lines we do not translate: the overlay keeps clear of them
         self.overlay_rects = lambda: []  # set by main(): the boxes the overlay has drawn, in screen pixels
@@ -376,6 +379,7 @@ class Worker(QObject):
         self._boxes = boxes
         self.results.emit(self._digest(lines, edge, self.settings))
         self.status.emit(self._status_text())
+        self._report_problem()
         self.dirty = self.dirty or any(t["seen"] < 2 for t in self.tracks)
         self._last_scan = time.monotonic()
 
@@ -414,6 +418,17 @@ class Worker(QObject):
         items += [(t["x"] + ox, t["y"] + oy, t["w"], t["h"], None if hide else _visible(t), t["lh"]) for t in self.tracks]
         return items
 
+    def _report_problem(self):
+        """Tells the user once (per kind) why text is read but not translated; again only after it worked in between."""
+        found = self.translator.problem()
+        kind = found[0] if found else None
+        if kind != self._reported:
+            self._reported = kind
+            if found:
+                key = {"packs": "problem_packs", "refused": "problem_refused", "network": "problem_network",
+                       "offline": "problem_offline", "other": "problem_other"}[kind]
+                self.problem.emit(i18n.t(key, detail=found[1][:120]))
+
     def _status_text(self):
         t = self.translator
         if t.missing_packs:
@@ -421,6 +436,8 @@ class Worker(QObject):
             return i18n.t("status_packs_needed", names=need)
         if t.server and t.engine == "server":
             return i18n.t("status_running_server")
+        if t.offline_error:
+            return i18n.t("status_offline_error", err=t.offline_error[:120])
         return i18n.t({"ok": "status_running_google", "limited": "status_google_limited",
                        "unreachable": "status_google_unreachable"}.get(t.google_state(), "status_running_offline"))
 
@@ -632,6 +649,7 @@ class Worker(QObject):
                     self.status.emit(i18n.t("status_error", err=e))
                 self.results.emit(self._snapshot())
                 self.status.emit(self._status_text())  # the engine is known once something is translated
+                self._report_problem()
                 self.dirty = self.dirty or any(t["seen"] < 2 for t in self.tracks)
 
     def _match_track(self, block, used, boxes=()):
@@ -677,6 +695,8 @@ class Panel(QWidget):
     update_found = Signal(str, str)
     update_ready = Signal(str)
     language_changed = Signal()
+    hidden_to_tray = Signal()
+    diagnosed = Signal(str)
 
     def __init__(self, worker, overlay, langs, speech=None, captions=None):
         super().__init__()
@@ -713,6 +733,13 @@ class Panel(QWidget):
         self.skip_names = self._check("skip_names", s["skip_names"])
         self.disk_cache = self._check("disk_cache", s["disk_cache"])
         self.hide_on_scroll = self._check("hide_on_scroll", s["hide_on_scroll"])
+        self.close_action = QComboBox()
+        for action in ("ask", "tray", "quit"):
+            self.close_action.addItem("", action)
+        self._select(self.close_action, s["close_action"])
+        self.diagnose_button = QPushButton()
+        self._text(self.diagnose_button.setText, "diagnose_button")
+        self.diagnose_button.clicked.connect(self.run_diagnosis)
         self.autostart = self._check("autostart", s["autostart"])
         self.start_on_launch = self._check("start_on_launch", s["start_on_launch"])
         self.google = self._check("google_enable", s["use_google"])
@@ -820,11 +847,15 @@ class Panel(QWidget):
         box = QVBoxLayout(startup)
         box.addWidget(self.autostart)
         box.addWidget(self.start_on_launch)
+        close_form = QFormLayout()
+        self._row(close_form, "close_action", self.close_action)
+        box.addLayout(close_form)
         lay.addWidget(startup)
         app_box = QGroupBox()
         self._text(app_box.setTitle, "group_app")
         box = QVBoxLayout(app_box)
         box.addWidget(self.update_button)
+        box.addWidget(self.diagnose_button)
         box.addWidget(self.version_label)
         lay.addWidget(app_box)
         lay.addStretch(1)
@@ -855,6 +886,8 @@ class Panel(QWidget):
         self.skip_names.toggled.connect(self.apply)
         self.disk_cache.toggled.connect(self.apply)
         self.hide_on_scroll.toggled.connect(self.apply)
+        self.close_action.currentIndexChanged.connect(self.apply)
+        self.diagnosed.connect(self._show_diagnosis)
         self.auto.toggled.connect(self.apply)
         self.kata.toggled.connect(self.apply)
         self.glossary.textChanged.connect(self.apply)
@@ -911,6 +944,8 @@ class Panel(QWidget):
         for setter, key, values in self._texts:
             setter(t(key, **values))
         self.glossary.setPlaceholderText(t("glossary_placeholder"))
+        for i, key in enumerate(("close_ask", "close_tray", "close_quit")):
+            self.close_action.setItemText(i, t(key))
         for i, key in enumerate(("server_off", "server_libre", "server_openai")):
             self.server_kind.setItemText(i, t(key))
         self.speech_source.setItemText(0, t("audio_system"))
@@ -960,6 +995,7 @@ class Panel(QWidget):
             "skip_names": self.skip_names.isChecked(),
             "disk_cache": self.disk_cache.isChecked(),
             "hide_on_scroll": self.hide_on_scroll.isChecked(),
+            "close_action": self.close_action.currentData(),
             "use_google": self.google.isChecked(),
             "server_kind": self.server_kind.currentData(), "server_url": self.server_url.text(),
             "server_key": self.server_key.text(), "server_model": self.server_model.text(),
@@ -1147,10 +1183,58 @@ class Panel(QWidget):
         super().showEvent(e)
         ctypes.windll.user32.SetWindowDisplayAffinity(int(self.winId()), 0x11)
 
-    def closeEvent(self, e):  # the X button quits the whole app
+    def run_diagnosis(self):
+        """What works and what does not, in one box that can be copied into a bug report."""
+        self.diagnose_button.setEnabled(False)
+        target = self.current()["target"]
+
+        def work():
+            text = f"Screen Translator {__version__}\n" + diagnose(target)
+            text += "\nSpeech model (" + self.speech_model.currentData() + "): " + (
+                "installed" if find_model(self.speech_model.currentData()) else "not installed")
+            self.diagnosed.emit(text)
+        threading.Thread(target=work, daemon=True).start()
+
+    def _show_diagnosis(self, text):
+        self.diagnose_button.setEnabled(True)
+        box = QMessageBox(self)
+        box.setWindowTitle(t("diagnose_title"))
+        box.setText(text)
+        box.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        box.exec()
+
+    def shutdown(self):
         self.worker.stop()
         if self.speech is not None:
             self.speech.stop()
+
+    def _ask_close(self):
+        """The first time the X is pressed: keep running in the tray, or quit everything. None: stay open."""
+        box = QMessageBox(self)
+        box.setWindowTitle(t("close_title"))
+        box.setText(t("close_text"))
+        keep = box.addButton(t("btn_keep_running"), QMessageBox.AcceptRole)
+        leave = box.addButton(t("btn_quit_all"), QMessageBox.DestructiveRole)
+        box.addButton(t("btn_cancel"), QMessageBox.RejectRole)
+        box.exec()
+        return "tray" if box.clickedButton() is keep else "quit" if box.clickedButton() is leave else None
+
+    def closeEvent(self, e):
+        """The X button. The first time it asks what should happen and remembers the answer (changeable in General)."""
+        action = self.close_action.currentData()
+        if action != "quit" and QSystemTrayIcon.isSystemTrayAvailable():
+            if action == "ask":
+                action = self._ask_close()
+                if action is None:
+                    e.ignore()
+                    return
+                self._select(self.close_action, action)
+            if action == "tray":
+                e.ignore()
+                self.hide()
+                self.hidden_to_tray.emit()
+                return
+        self.shutdown()
         e.accept()
         QApplication.quit()
 
@@ -1222,6 +1306,15 @@ def main():
     panel.language_changed.connect(retitle_tray)
     tray.setContextMenu(menu)
     tray.activated.connect(lambda r: panel.show() if r == QSystemTrayIcon.Trigger else None)
+    told = []
+
+    def tell_once():
+        if not told:  # the first time only: it is still running, and the tray icon is how to bring it back or quit
+            told.append(1)
+            tray.showMessage(t("tray_still_running_title"), t("tray_still_running"), QSystemTrayIcon.Information, 6000)
+    panel.hidden_to_tray.connect(tell_once)
+    worker.problem.connect(lambda text: tray.showMessage(t("problem_title"), text, QSystemTrayIcon.Warning, 10000))
+    app.aboutToQuit.connect(panel.shutdown)
     tray.show()
     sys.exit(app.exec())
 

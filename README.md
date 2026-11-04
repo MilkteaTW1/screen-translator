@@ -52,6 +52,7 @@ Optionally set your own server (Quality tab: LibreTranslate, or an OpenAI-compat
 The app downloads no model for this; it is for people who already run a server. If you set one up just for this, a small model (around 1 GB, such as a 1-2B instruct model) is enough for short lines.
 When a translation has to be laid over its text, it is painted in the page's own colour so it reads as the text replaced; the round button hides the covers to show the original.
 A setting (off by default) hides all translations while the page scrolls and shows them when it stops, which some people find easier on the eyes.
+When text is read but cannot be translated, the app says why once (Google refusing, no internet, offline pack missing, offline engine broken); Settings > General > Test translation shows what works. The X button asks the first time whether to keep running in the tray or quit everything, and remembers the answer (changeable in General).
 Google's translations are remembered in `%APPDATA%\ScreenTranslator\translations.jsonl` so the same text is not sent again. That file is plain text and holds what was on your screen; turn the option off in the settings and it is deleted.
 
 ## Android
@@ -171,6 +172,7 @@ MIT
 程式不會為此下載任何模型,這是給本來就有在跑伺服器的人用的。如果要特地架一個,小模型(約 1 GB,例如 1~2B 的 instruct 模型)翻短句就夠了。
 翻譯框必須蓋在原文上時,會用該處頁面的底色,看起來像原文被換掉;小圓鈕可一鍵隱藏覆蓋、看原文。
 有個設定(預設關閉)可在頁面捲動時先隱藏所有翻譯,停下來再顯示,有些人覺得這樣視覺上比較舒服。
+有辨識到文字卻無法翻譯時,程式只會說明一次原因(Google 拒絕、沒網路、缺離線語言包、離線引擎出錯);「設定 > 一般 > 測試翻譯」可看哪些可用。按 X 時,第一次會問要縮到系統匣繼續執行還是全部關閉,並記住答案(可在「一般」更改)。
 Google 的翻譯會記在 `%APPDATA%\ScreenTranslator\translations.jsonl`,相同文字不會重新送出。這個檔案是明文,內容就是你螢幕上出現過的文字;在設定中關閉這個選項就會刪除。
 
 ## Android 手機版

@@ -9,6 +9,9 @@
     <string name="glossary_label">Never translate these (one per line), or choose a translation: thread = 執行緒</string>
     <string name="remember_translations">Remember translations on this phone, so the same text is not sent again (turning this off deletes them)</string>
     <string name="hide_on_scroll">Hide translations while the page scrolls, show them when it stops (easier on the eyes)</string>
+    <string name="problem_refused">Text was read but not translated: Google is refusing requests from this phone for now, and the offline model is not available. Download the language in the app, or wait.</string>
+    <string name="problem_network">Text was read but not translated: cannot reach Google (check the internet), and the offline model is not available.</string>
+    <string name="problem_offline">Text was read but not translated: the offline translation failed. %1$s</string>
     <string name="use_google">Use Google Translate first (sends the text to Google; offline translation is the backup)</string>
     <string name="what_to_translate">What to translate</string>
     <string name="screen_text">Text on the screen</string>

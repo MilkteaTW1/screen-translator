@@ -362,3 +362,44 @@ def test_the_server_address_must_be_http(monkeypatch):
     import pytest
     with pytest.raises(OSError):
         t._server_json("file:///etc/passwd", {})
+
+
+def test_why_the_offline_engine_failed_is_kept_so_it_can_be_shown(monkeypatch):
+    import screen_translator.translator as t
+    tr = t.Translator()
+    tr.google = False
+
+    def broken(texts, *a):
+        raise RuntimeError("cannot load the model")
+    monkeypatch.setattr(tr, "_argos_many", broken)
+    assert tr.translate("Hello there, world.", "en", "zh-TW", "en-US", [], False, False) is None
+    assert "cannot load the model" in tr.offline_error
+
+
+def test_the_test_translation_says_what_google_and_the_offline_engine_did(monkeypatch):
+    import screen_translator.translator as t
+
+    def refused(*a, **k):
+        raise t.RateLimited("Google refused with 302")
+    monkeypatch.setattr(t, "google_translate", refused)
+    monkeypatch.setattr(t, "missing_pairs", lambda s, d: [("en", "zt")])
+    text = t.diagnose("zh-TW")
+    assert "Google: refused" in text and "302" in text and "Offline: language pack missing: en>zt" in text
+
+
+def test_one_likeliest_reason_is_given_when_text_is_read_but_not_translated(monkeypatch):
+    import screen_translator.translator as t
+    tr = t.Translator()
+    assert tr.problem() is None  # nothing went wrong
+    tr.unserved = True
+    tr.google = False
+    tr.missing_packs = {("en", "zt")}
+    assert tr.problem() == ("packs", "en>zt")
+    tr.google, tr.missing_packs = True, set()
+    tr._google_down, tr._limits = 1e12, 1
+    assert tr.problem()[0] == "refused"
+    tr._limits, tr.google_error = 0, "TimeoutError: timed out"
+    assert tr.problem() == ("network", "TimeoutError: timed out")
+    tr.offline_error = "RuntimeError: boom"
+    assert tr.problem() == ("offline", "RuntimeError: boom")  # the engine itself broke: that comes first
+
