@@ -10,7 +10,7 @@ import zlib
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from . import packs
+from . import better, packs
 
 # Target languages offered in the UI: display name -> code (zh-TW / zh-CN are mapped to Argos zt / zh).
 LANGUAGES = {
@@ -413,6 +413,7 @@ class Translator:
     def __init__(self):
         self.cache = {}
         self.google = False  # use Google Translate first, the offline engine is the fallback
+        self.better = False  # the offline engine is the optional language model (when it is downloaded), not the standard packs
         self._google_down = 0.0  # Google is not tried again before this moment
         self.disk = None  # a DiskCache, if translations are to be remembered
         self.server = None  # {"kind", "url", "key", "model"}: the user's own server, tried after Google, before offline
@@ -429,6 +430,8 @@ class Translator:
     def _argos_many(self, texts, src, dst):
         """Translate offline, all texts in one batch. Returns None per text (and records what's missing) if packs aren't installed."""
         a, b = argos_code(src), argos_code(dst)
+        if self.better and better.installed() and a != "auto":
+            return texts if a == b else better.translate_many(texts, a, b)
         missing = missing_pairs(src, dst)
         if a == "auto" or missing:
             self.missing_packs.update(missing)
@@ -620,6 +623,7 @@ def diagnose(dst, src="en"):
     except Exception as e:
         lines.append(f"Google: failed ({type(e).__name__}: {e})")
     missing = missing_pairs(src, dst)
+    lines.append(f"Better offline model ({better.NAME}): " + ("downloaded" if better.installed() else "not downloaded"))
     if missing:
         lines.append("Offline: language pack missing: " + ", ".join(f"{a}>{b}" for a, b in sorted(missing)))
     else:

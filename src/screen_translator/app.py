@@ -24,7 +24,7 @@ from PySide6.QtWidgets import (
     QLineEdit, QMenu, QMessageBox, QPlainTextEdit, QPushButton, QSystemTrayIcon, QTabWidget, QVBoxLayout, QWidget,
 )
 
-from . import ocr, tracking
+from . import better, ocr, tracking
 from .overlay import CaptionOverlay, CoverChip, Overlay
 from .speech import MODELS, SpeechWorker, download_model, ensure_streams, find_model, import_model
 from . import __version__, i18n, packs, updater
@@ -42,7 +42,7 @@ DEFAULTS = {
     "hide_from_capture": True, "skip_names": True, "disk_cache": True, "hide_on_scroll": False, "close_action": "ask",
     "autostart": False, "start_on_launch": False,
     "speech_enabled": False, "speech_source": "system", "speech_model": "base", "speech_lang": "auto",
-    "use_google": True,
+    "use_google": True, "offline_engine": "standard",
     "server_kind": "off", "server_url": "", "server_key": "", "server_model": "",
     "ui_language": "",  # interface language; empty = the one Windows is set to
 }
@@ -193,6 +193,7 @@ class Worker(QObject):
 
     def _use_engine(self, s):
         self.translator.google = bool(s.get("use_google", True))
+        self.translator.better = s.get("offline_engine") == "better"
         kind, url = s.get("server_kind", "off"), s.get("server_url", "").strip()
         self.translator.server = ({"kind": kind, "url": url, "key": s.get("server_key", ""),
                                    "model": s.get("server_model", "")} if kind != "off" and url else None)
@@ -743,6 +744,10 @@ class Panel(QWidget):
         self.autostart = self._check("autostart", s["autostart"])
         self.start_on_launch = self._check("start_on_launch", s["start_on_launch"])
         self.google = self._check("google_enable", s["use_google"])
+        self.offline_engine = QComboBox()
+        for engine in ("standard", "better"):
+            self.offline_engine.addItem("", engine)
+        self._select(self.offline_engine, s["offline_engine"])
         self.server_kind = QComboBox()
         for kind in ("off", "libretranslate", "openai"):
             self.server_kind.addItem("", kind)
@@ -830,6 +835,9 @@ class Panel(QWidget):
         self._text(engine.setTitle, "group_engine")
         box = QVBoxLayout(engine)
         box.addWidget(self.google)
+        offline_form = QFormLayout()
+        self._row(offline_form, "offline_engine", self.offline_engine)
+        box.addLayout(offline_form)
         server_form = QFormLayout()
         self._row(server_form, "server_kind", self.server_kind)
         self._row(server_form, "server_url", self.server_url)
@@ -892,6 +900,7 @@ class Panel(QWidget):
         self.kata.toggled.connect(self.apply)
         self.glossary.textChanged.connect(self.apply)
         self.google.toggled.connect(self.apply)
+        self.offline_engine.currentIndexChanged.connect(self._offline_engine_changed)
         self.server_kind.currentIndexChanged.connect(self.apply)
         for w in (self.server_url, self.server_key, self.server_model):
             w.editingFinished.connect(self.apply)
@@ -946,6 +955,8 @@ class Panel(QWidget):
         self.glossary.setPlaceholderText(t("glossary_placeholder"))
         for i, key in enumerate(("close_ask", "close_tray", "close_quit")):
             self.close_action.setItemText(i, t(key))
+        for i, key in enumerate(("offline_standard", "offline_better")):
+            self.offline_engine.setItemText(i, t(key, mb=better.SIZE_MB))
         for i, key in enumerate(("server_off", "server_libre", "server_openai")):
             self.server_kind.setItemText(i, t(key))
         self.speech_source.setItemText(0, t("audio_system"))
@@ -996,7 +1007,7 @@ class Panel(QWidget):
             "disk_cache": self.disk_cache.isChecked(),
             "hide_on_scroll": self.hide_on_scroll.isChecked(),
             "close_action": self.close_action.currentData(),
-            "use_google": self.google.isChecked(),
+            "use_google": self.google.isChecked(), "offline_engine": self.offline_engine.currentData(),
             "server_kind": self.server_kind.currentData(), "server_url": self.server_url.text(),
             "server_key": self.server_key.text(), "server_model": self.server_model.text(),
             "autostart": self.autostart.isChecked(), "start_on_launch": self.start_on_launch.isChecked(),
@@ -1194,6 +1205,33 @@ class Panel(QWidget):
                 "installed" if find_model(self.speech_model.currentData()) else "not installed")
             self.diagnosed.emit(text)
         threading.Thread(target=work, daemon=True).start()
+
+    def _offline_engine_changed(self, *_):
+        """The better offline model is a 1.5 GB download: ask first, and fall back to the standard packs if it is not wanted."""
+        if self.offline_engine.currentData() == "better" and not better.installed():
+            box = QMessageBox(self)
+            box.setWindowTitle(t("better_title"))
+            box.setText(t("better_text", mb=better.SIZE_MB))
+            download = box.addButton(t("btn_download"), QMessageBox.AcceptRole)
+            box.addButton(t("btn_not_now"), QMessageBox.RejectRole)
+            box.exec()
+            if box.clickedButton() is download and not self.downloading:
+                self.downloading = True
+                threading.Thread(target=self._download_better, daemon=True).start()
+            else:
+                self.offline_engine.blockSignals(True)
+                self._select(self.offline_engine, "standard")
+                self.offline_engine.blockSignals(False)
+        self.apply()
+
+    def _download_better(self):
+        try:
+            self.pack_status.emit(t("better_downloading"))
+            better.install(lambda pct: self.pack_status.emit(t("better_progress", pct=pct)))
+            self.pack_status.emit(t("better_ready"))
+        except Exception as e:
+            self.pack_status.emit(t("download_failed", err=e))
+        self.pack_finished.emit()
 
     def _show_diagnosis(self, text):
         self.diagnose_button.setEnabled(True)

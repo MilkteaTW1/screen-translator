@@ -115,5 +115,13 @@
   "diagnose_button": "Test translation (shows what works and what does not)",
   "diagnose_title": "Translation test",
   "status_offline_error": "Offline translation failed: {err}",
-  "speech_no_translation": "Heard, but there is no translation: {err}"
+  "speech_no_translation": "Heard, but there is no translation: {err}",
+  "offline_engine": "Offline translation",
+  "offline_standard": "Standard (small, fast)",
+  "offline_better": "Better wording (download {mb} MB, slower)",
+  "better_title": "Better offline translation",
+  "better_text": "This uses a larger language model (Qwen2.5 1.5B) that translates more naturally and handles idioms and words with several meanings, but it is a {mb} MB download, uses more memory and is slower than the standard packs. It runs on your computer. Download it now?",
+  "better_downloading": "Downloading the better offline model...",
+  "better_progress": "Downloading the better offline model... {pct}%",
+  "better_ready": "The better offline model is ready."
 }

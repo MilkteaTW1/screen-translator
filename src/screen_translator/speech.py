@@ -180,6 +180,7 @@ class SpeechWorker(QObject):
     def configure(self, settings):
         self.settings = settings
         self.translator.google = bool(settings.get("use_google", True))
+        self.translator.better = settings.get("offline_engine") == "better"
         self.translator.clear()
 
     def start(self):
