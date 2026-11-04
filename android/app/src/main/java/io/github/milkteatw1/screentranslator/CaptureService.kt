@@ -60,6 +60,7 @@ class CaptureService : Service() {
         private const val BATCH = 8  // blocks per translation request
         private const val MAX_REREADS = 4
         private const val MAX_CAPTIONS = 4
+        const val CAPTION_LIFETIME_MS = 25_000L  // how long a caption stays up (the same as on Windows) when nothing new is said
         private const val COVER_SETTLE_MS = 400L
         private const val MOVING_SCAN_MS = 350L
         private const val RETRY_MS = 3000L
@@ -105,6 +106,31 @@ class CaptureService : Service() {
     private var pool = Executors.newFixedThreadPool(TRANSLATE_THREADS)
     private var speech: SpeechEngine? = null
     private val captions = ArrayList<Pair<String, String>>()
+    private val captionAt = ArrayList<Long>()  // when each caption was added, same order as [captions]
+    @Volatile private var partialAt = 0L
+
+    /** Takes down captions (and a half-said sentence) that have been up for [CAPTION_LIFETIME_MS]: nothing new is said, so nothing stays on the screen. */
+    private val expireCaptions = object : Runnable {
+        override fun run() {
+            val now = SystemClock.uptimeMillis()
+            synchronized(captions) {
+                while (captionAt.isNotEmpty() && now - captionAt[0] >= CAPTION_LIFETIME_MS) { captions.removeAt(0); captionAt.removeAt(0) }
+                overlay?.captions = captions.toList()
+                Log.i(TAG, "captions: ${captions.size} on screen")
+                val said = overlay?.partial?.first ?: ""
+                // a warning (⚠ 🔇) or the listening mark stays: it says why nothing shows; a sentence nobody finished does not
+                if (said.isNotEmpty() && said.first() !in "⚠🔇🎧" && now - partialAt >= CAPTION_LIFETIME_MS) overlay?.partial = "" to ""
+                val next = listOfNotNull(captionAt.firstOrNull()?.plus(CAPTION_LIFETIME_MS), if (overlay?.partial?.first?.isNotEmpty() == true) partialAt + CAPTION_LIFETIME_MS else null).minOrNull()
+                handler.removeCallbacks(this)
+                if (next != null) handler.postDelayed(this, (next - now).coerceAtLeast(500))
+            }
+        }
+    }
+
+    private fun scheduleCaptionExpiry() {
+        handler.removeCallbacks(expireCaptions)
+        handler.postDelayed(expireCaptions, CAPTION_LIFETIME_MS)
+    }
     private var width = 0
     private var height = 0
     @Volatile private var tracks = listOf<Track>()
@@ -204,7 +230,7 @@ class CaptureService : Service() {
         } else if (!speech && speechOn) {
             this.speech?.stop()
             this.speech = null
-            synchronized(captions) { captions.clear() }
+            synchronized(captions) { captions.clear(); captionAt.clear() }
             overlay?.captions = emptyList()
             overlay?.partial = "" to ""
             speechOn = false
@@ -359,12 +385,16 @@ class CaptureService : Service() {
         val engine = SpeechEngine(
             this, prefs.spokenLanguage, prefs.whisperModel, tgt, glossary, prefs.useGoogle,
             // late results of an engine that was stopped must not put captions back on the screen
-            onPartial = { said, translation -> if (this@CaptureService.speech != null) overlay?.partial = said to translation },
+            onPartial = { said, translation ->
+                if (this@CaptureService.speech != null) { partialAt = SystemClock.uptimeMillis(); overlay?.partial = said to translation; scheduleCaptionExpiry() }
+            },
             onLine = { said, translated ->
                 if (this@CaptureService.speech != null) synchronized(captions) {
                     captions.add(said to translated)
-                    while (captions.size > MAX_CAPTIONS) captions.removeAt(0)
+                    captionAt.add(SystemClock.uptimeMillis())
+                    while (captions.size > MAX_CAPTIONS) { captions.removeAt(0); captionAt.removeAt(0) }
                     overlay?.captions = captions.toList()
+                    scheduleCaptionExpiry()
                 }
             },
             onStatus = { message ->
