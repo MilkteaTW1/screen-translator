@@ -13,3 +13,4 @@ sentencepiece>=0.2
 faster-whisper>=1.0
 soundcard>=0.4.3
 zhconv>=1.4
+tokenizers>=0.15

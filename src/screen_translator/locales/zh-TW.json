@@ -115,5 +115,13 @@
   "diagnose_button": "測試翻譯(顯示哪些可用、哪些不可用)",
   "diagnose_title": "翻譯測試",
   "status_offline_error": "離線翻譯失敗:{err}",
-  "speech_no_translation": "聽到了,但沒有翻譯:{err}"
+  "speech_no_translation": "聽到了,但沒有翻譯:{err}",
+  "offline_engine": "離線翻譯",
+  "offline_standard": "標準(小、快)",
+  "offline_better": "更好的用詞(需下載 {mb} MB,較慢)",
+  "better_title": "更好的離線翻譯",
+  "better_text": "這會使用較大的語言模型(Qwen2.5 1.5B),翻譯比較自然,也能處理成語和一字多義,但需要下載 {mb} MB、佔用更多記憶體,速度也比標準語言包慢。它在您的電腦上執行。要現在下載嗎?",
+  "better_downloading": "正在下載更好的離線模型……",
+  "better_progress": "正在下載更好的離線模型……{pct}%",
+  "better_ready": "更好的離線模型已就緒。"
 }

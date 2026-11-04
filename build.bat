@@ -7,7 +7,7 @@ pyinstaller --noconfirm --windowed --icon "%~dp0assets\icon.ico" --name ScreenTr
   --distpath "%OUT%" --workpath "%OUT%\work" --specpath "%OUT%" ^
   --add-data "%~dp0src\screen_translator\locales;screen_translator\locales" ^
   --add-data "%~dp0src\screen_translator\icon.png;screen_translator" ^
-  --collect-all ctranslate2 --collect-all sentencepiece --collect-all faster_whisper --collect-all soundcard --collect-all zhconv ^
+  --collect-all ctranslate2 --collect-all sentencepiece --collect-all faster_whisper --collect-all soundcard --collect-all zhconv --collect-all tokenizers ^
   --exclude-module torch --exclude-module spacy --exclude-module stanza --exclude-module argostranslate --exclude-module av ^
   --exclude-module onnxruntime --exclude-module matplotlib --exclude-module tkinter ^
   --exclude-module PySide6.QtWebEngineCore --exclude-module PySide6.QtWebEngineWidgets ^
