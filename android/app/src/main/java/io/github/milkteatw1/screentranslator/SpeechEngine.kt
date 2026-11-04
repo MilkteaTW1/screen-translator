@@ -213,7 +213,17 @@ class SpeechEngine(
     /** The translation of [said], spoken in [code]: "" when it is already the target language or nothing works. */
     private fun translate(said: String, code: String, online: Boolean = true): String {
         val spoken = code.lowercase()
-        if (spoken == target.code) return ""
+        val own = ScriptMix.ownLetter(target.code)
+        if (spoken == target.code) {
+            if (own == null) return ""
+            // spoken in the target language: only the stretches in other scripts (an English word in it) are translated
+            return ScriptMix.mix(said, own) { piece -> if (piece.any { it in 'A'..'Z' || it in 'a'..'z' }) translateOne(piece, "en", online) else "" }
+        }
+        if (own != null && said.codePoints().noneMatch { Character.isLetter(it) && !own(it) }) return ""  // the language guess was wrong
+        return translateOne(said, spoken, online)
+    }
+
+    private fun translateOne(said: String, spoken: String, online: Boolean): String {
         return try {
             val (protectedText, originals) = TextRules.protect(said, glossary, false)
             val key = Prefs(context).geminiKey

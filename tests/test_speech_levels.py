@@ -135,3 +135,48 @@ def test_a_caption_line_that_nothing_replaces_goes_away_too():
     c.live_at -= c.LIFETIME + 1  # speech stopped mid-sentence long ago
     c._expire()
     assert c.live is None
+
+
+def test_words_already_in_the_target_script_are_not_translated():
+    from screen_translator.speech import _OWN_RE, foreign_runs, mix_translate
+    zh = _OWN_RE["zh"]
+    assert foreign_runs("我今天去公司", zh) == []
+    assert mix_translate("我今天去公司", zh, lambda p: 1 / 0) == ""  # nothing is asked of the translator
+    text = "我用 Python 寫程式"
+    (a, b), = foreign_runs(text, zh)
+    assert text[a:b] == "Python"
+
+
+def test_a_run_of_foreign_words_is_translated_as_one_and_put_back():
+    from screen_translator.speech import _OWN_RE, mix_translate
+    asked = []
+    out = mix_translate("我覺得 this is really good 而且很便宜", _OWN_RE["zh"], lambda p: asked.append(p) or "這真的很好")
+    assert asked == ["this is really good"] and out == "我覺得 這真的很好 而且很便宜"
+    assert mix_translate("我覺得 hello 很好", _OWN_RE["zh"], lambda p: "") == "我覺得 hello 很好"  # no translation: as said
+
+
+def _speech_with(target, translate):
+    from screen_translator import speech
+    cls = next(v for v in vars(speech).values() if isinstance(v, type) and "_translate" in vars(v))
+    obj = cls.__new__(cls)
+    obj.settings = {"target": target, "glossary": "", "auto_proper": False, "keep_katakana": False}
+    obj.translator = type("T", (), {"translate": staticmethod(translate), "missing_packs": set(),
+                                    "offline_error": None, "google_error": None})()
+    obj.status = type("S", (), {"emit": staticmethod(lambda *_: None)})()
+    return obj
+
+
+def test_chinese_speech_is_shown_as_it_is_and_never_sent_to_the_translator():
+    def never(*a, **k):
+        raise AssertionError("asked")
+    s = _speech_with("zh-TW", never)
+    assert s._translate("我今天去公司", "zh") == ""
+    assert s._translate("我今天去公司", "en") == ""  # the language guess was wrong: still no translation
+
+
+def test_english_words_inside_chinese_speech_are_translated_alone():
+    seen = []
+    s = _speech_with("zh-TW", lambda text, *a, **k: seen.append(text) or "很好")
+    assert s._translate("我覺得 very good 啊", "zh") == "我覺得很好啊"
+    assert seen == ["very good"]
+    assert _speech_with("zh-TW", lambda text, *a, **k: "你好嗎")._translate("how are you", "en") == "你好嗎"

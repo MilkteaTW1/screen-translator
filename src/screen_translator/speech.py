@@ -4,6 +4,7 @@ Audio never leaves the machine. The Whisper model (faster-whisper / CTranslate2)
 user agrees, or an existing model folder is reused."""
 import os
 import queue
+import re
 import sys
 import threading
 import time
@@ -14,6 +15,7 @@ import numpy as np
 from PySide6.QtCore import QObject, Signal
 
 from .i18n import t
+from .packs import tidy_chinese
 from .translator import Translator, server_from_settings
 
 SAMPLE_RATE = 16000
@@ -31,6 +33,47 @@ MIN_SPEECH = 0.4  # seconds: shorter sounds are clicks, not speech
 MAX_BACKLOG = 3  # utterances waiting for transcription; older ones are dropped to stay real-time
 LIVE_TRANSLATE_EVERY = 1.0  # seconds between translations of the sentence being spoken: one request per word got Google to refuse everything
 PARTIAL_STEP = 0.3  # seconds of new speech between live updates of the sentence being spoken
+
+# Targets with a script of their own: words already in it need no translation, only the stretches in other scripts do.
+_OWN_SCRIPT = {
+    "zh": "㐀-䶿一-鿿豈-﫿", "ja": "㐀-䶿一-鿿぀-ヿ", "ko": "가-힣ᄀ-ᇿ", "ru": "Ѐ-ӿ", "uk": "Ѐ-ӿ",
+    "bg": "Ѐ-ӿ", "el": "Ͱ-Ͽ", "ar": "؀-ۿ", "he": "֐-׿", "th": "฀-๿", "hi": "ऀ-ॿ",
+}
+_OWN_RE = {k: re.compile(f"[{v}]") for k, v in _OWN_SCRIPT.items()}
+
+
+def foreign_runs(text, own):
+    """(start, end) of each stretch of letters that are not in the target's own script, with what lies between them
+    (spaces, digits, marks) but not what trails them. Words already in the target script are not in any."""
+    runs, i, n = [], 0, len(text)
+    while i < n:
+        if text[i].isalpha() and not own.match(text[i]):
+            j = i + 1
+            while j < n and not own.match(text[j]):
+                j += 1
+            end = j
+            while end > i and not text[end - 1].isalnum():
+                end -= 1
+            runs.append((i, end))
+            i = j
+        else:
+            i += 1
+    return runs
+
+
+def mix_translate(text, own, translate_run):
+    """The sentence with each stretch that is not in the target's script translated (a stretch that does not translate
+    stays as said). "" when there is none: the sentence is already in the target language and is shown as it is."""
+    runs = foreign_runs(text, own)
+    if not runs:
+        return ""
+    out, pos = [], 0
+    for a, b in runs:
+        out.append(text[pos:a])
+        out.append(translate_run(text[a:b]) or text[a:b])
+        pos = b
+    out.append(text[pos:])
+    return "".join(out)
 
 
 def whisper_model_class():
@@ -262,11 +305,23 @@ class SpeechWorker(QObject):
     def _translate(self, text, code, online=True):
         s = self.settings
         target = s["target"]
-        if code == target.split("-")[0].lower():
-            return ""
+        tbase = target.split("-")[0].lower()
+        own = _OWN_RE.get(tbase)
         glossary = [t.strip() for t in s["glossary"].splitlines() if t.strip()]
-        translation = self.translator.translate(
-            text, {"zh": "zh-CN"}.get(code, code), target, code, glossary, s["auto_proper"], s["keep_katakana"], online) or ""
+
+        def run(piece, spoken):
+            return self.translator.translate(
+                piece, {"zh": "zh-CN"}.get(spoken, spoken), target, spoken, glossary, s["auto_proper"], s["keep_katakana"], online) or ""
+
+        if code == tbase:
+            if not own:
+                return ""
+            # spoken in the target language: only foreign stretches (an English word in a Chinese sentence) are translated
+            mixed = mix_translate(text, own, lambda piece: run(piece, "en") if re.search("[A-Za-z]", piece) else "")
+            return tidy_chinese(mixed) if tbase == "zh" and mixed else mixed
+        if own and not any(c.isalpha() and not own.match(c) for c in text):
+            return ""  # every letter is already in the target script (the language guess was wrong): nothing to translate
+        translation = run(text, code)
         if not online:
             return translation  # a draft: whatever is wrong is told when the finished sentence is translated
         if not translation and self.translator.missing_packs:
