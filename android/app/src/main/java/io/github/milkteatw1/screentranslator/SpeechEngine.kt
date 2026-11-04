@@ -216,7 +216,9 @@ class SpeechEngine(
         if (spoken == target.code) return ""
         return try {
             val (protectedText, originals) = TextRules.protect(said, glossary, false)
-            val google = if (useGoogle && online) GoogleTranslate.translate(protectedText, target) else null
+            val key = Prefs(context).geminiKey
+            val gemini = if (online && key.isNotBlank()) GeminiTranslate.translateMany(key, listOf(protectedText), target)[0] else null
+            val google = gemini ?: if (useGoogle && online) GoogleTranslate.translate(protectedText, target) else null
             var out = google
                 ?: offline(spoken)?.let { Tasks.await(it.translate(protectedText), 20, TimeUnit.SECONDS) }
                 ?: run { if (online) reportTrouble(""); return "" }

@@ -11,6 +11,11 @@
     <string name="problem_refused">有辨識到文字,但沒有翻譯:Google 暫時拒絕這支手機的請求,而且離線模型不可用。請在 App 內下載語言,或稍後再試。</string>
     <string name="problem_network">有辨識到文字,但沒有翻譯:連不上 Google(請檢查網路),而且離線模型不可用。</string>
     <string name="problem_offline">有辨識到文字,但沒有翻譯:離線翻譯失敗。%1$s</string>
+    <string name="section_gemini">Gemini(您自己的金鑰)</string>
+    <string name="gemini_key_label">Gemini API 金鑰(優先於 Google;留空就不使用)</string>
+    <string name="gemini_steps">金鑰哪裡拿:1) 點下面的按鈕,用 Google 帳號登入;2) 按「Create API key」;3) 複製金鑰,貼到上面的欄位。一開始免費。文字會用您的金鑰傳給 Google。</string>
+    <string name="gemini_get_key">取得免費金鑰</string>
+    <string name="gemini_failed">Gemini 沒有翻譯,改用 Google 或離線:%1$s</string>
     <string name="use_google">優先使用 Google 翻譯(文字會傳送給 Google,離線翻譯當備援)</string>
     <string name="what_to_translate">要翻譯什麼</string>
     <string name="screen_text">螢幕上的文字</string>

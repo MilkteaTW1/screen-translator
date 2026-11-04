@@ -168,6 +168,21 @@ class MainActivity : ComponentActivity() {
         val remember = Ui.switch(ctx, getString(R.string.remember_translations), prefs.rememberTranslations)
         engine.addView(remember)
         pages[2].addView(engine)
+        // Gemini with the user's own key: tried before Google. For people who do not know where a key comes from: a link and steps.
+        val gemini = Ui.card(ctx, getString(R.string.section_gemini))
+        gemini.addView(Ui.label(ctx, getString(R.string.gemini_key_label)))
+        val geminiKey = Ui.field(ctx, prefs.geminiKey).apply {
+            hint = "AIza..."
+            inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD
+        }
+        gemini.addView(geminiKey)
+        gemini.addView(Ui.text(ctx, getString(R.string.gemini_steps), 13f, Ui.MUTED).apply { setPadding(0, dp(10), 0, 0) })
+        gemini.addView(Ui.pill(ctx, getString(R.string.gemini_get_key), false).apply {
+            setOnClickListener { startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(GeminiTranslate.KEY_PAGE))) }
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+                .apply { topMargin = dp(12) }
+        })
+        pages[2].addView(gemini)
         val names = Ui.card(ctx, getString(R.string.section_names))
         val skip = Ui.switch(ctx, getString(R.string.skip_names), prefs.skipNames)
         names.addView(skip)
@@ -236,11 +251,17 @@ class MainActivity : ComponentActivity() {
             prefs.hideOnScroll = hideOnScroll.isChecked
             if (!remember.isChecked) TranslationMemory(TranslationMemory.fileIn(ctx)).clear()  // off means forgotten
             prefs.glossary = glossary.text.toString()
+            prefs.geminiKey = geminiKey.text.toString()
             prefs.speechMic = soundSource.selectedItemPosition == 1
             prefs.spokenLanguage = spokenCodes[speechLang.selectedItemPosition]
             prefs.speechModel = WhisperModel.models[modelChoice.selectedItemPosition].name
         }
         for (s in listOf(google, remember, skip, hideOnScroll)) s.setOnCheckedChangeListener { _, _ -> save() }
+        geminiKey.addTextChangedListener(object : android.text.TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
+            override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
+            override fun afterTextChanged(s: android.text.Editable?) { save() }
+        })
         val saveOnPick = object : AdapterView.OnItemSelectedListener {
             var first = 2
             override fun onItemSelected(p: AdapterView<*>?, v: View?, pos: Int, id: Long) {
