@@ -6,6 +6,20 @@ object TextRules {
     private val latinWord = Regex("""[A-Za-z][A-Za-z0-9'’\-]*""")
     private val placeholder = Regex("""Z\s*(\d+)\s*Z""")
     private val camel = Regex("""[a-z][A-Z]""")
+
+    /** Capitalised in English but ordinary words to translate: days, months, languages, nationalities. */
+    private val commonCapitalised = ("monday tuesday wednesday thursday friday saturday sunday january february march april may june july " +
+        "august september october november december english chinese japanese korean french german spanish italian russian " +
+        "portuguese arabic hindi american british european asian african canadian australian indian mexican").split(" ").toSet()
+
+    /** "Sign In", "Read More": a button, not a name. */
+    private val uiTails = "in up out on off more back now us me all next here free again today".split(" ").toSet()
+
+    /** A line in capitals ("FREE SHIPPING ON ORDERS"): the capitals are style, not names. */
+    fun isShouting(text: String): Boolean {
+        val letters = text.filter { it.isLetter() }
+        return letters.length >= 5 && '_' !in text && letters.count { it.isUpperCase() } >= 0.9 * letters.length
+    }
     private val spaces = Regex("""\s+""")
     private const val NOISE_RATIO = 0.15
     private const val ALLOWED = "。、，．！？「」『』（）()・…ー〜~:：;；.,!?'\"’“”‘-—–/%&@#$+=[]<>"
@@ -84,7 +98,7 @@ object TextRules {
     private class Span(val first: Int, val last: Int, val forced: String?)
 
     /** Swaps proper nouns and chosen terms for placeholders ("Z0Z") so the translator leaves them alone. */
-    fun protect(text: String, glossary: List<String>, latin: Boolean): Pair<String, List<String>> {
+    fun protect(original: String, glossary: List<String>, latin: Boolean, base: String = "en"): Pair<String, List<String>> {
         val spans = mutableListOf<Span>()
         for (line in glossary.sortedByDescending { it.length }) {
             val (term, forced) = splitTerm(line)
@@ -93,18 +107,29 @@ object TextRules {
             val pattern = if (forced != null && term.all { it.code < 128 }) {
                 "(?<![A-Za-z0-9])" + Regex.escape(term) + "(?:e?s)?(?![A-Za-z0-9])"
             } else Regex.escape(term)
-            Regex(pattern, RegexOption.IGNORE_CASE).findAll(text).forEach { spans += Span(it.range.first, it.range.last, forced) }
+            Regex(pattern, RegexOption.IGNORE_CASE).findAll(original).forEach { spans += Span(it.range.first, it.range.last, forced) }
         }
+        // A line in capitals reads as words, not as a row of names; chosen terms keep their form.
+        val text = if (latin && isShouting(original) && original.lowercase().length == original.length) {
+            val lowered = original.lowercase()
+            val keep = BooleanArray(original.length)
+            for (s in spans) for (i in s.first..s.last) keep[i] = true
+            buildString { for (i in original.indices) append(if (keep[i]) original[i] else lowered[i]) }
+        } else original
         if (latin) {
             val words = latinWord.findAll(text).toList()
-            val titleCase = words.size >= 3 && words.count { it.value[0].isUpperCase() }.toDouble() / words.size >= 0.6
+            val titleCase = (words.size >= 3 && words.count { it.value[0].isUpperCase() }.toDouble() / words.size >= 0.6) ||
+                (words.size == 2 && words[0].value[0].isUpperCase() && words[1].value[0].isUpperCase() &&
+                    words[1].value.lowercase() in uiTails)
             for (m in words) {
                 val w = m.value
                 val before = text.substring(0, m.range.first).trimEnd()
                 val sentenceStart = before.isEmpty() || before.last() in ".!?:\"“"
                 val isCamel = camel.containsMatchIn(w)
                 val allCaps = w.length >= 2 && w.none { it.isLowerCase() } && w.any { it.isLetter() }
-                val capitalMid = w[0].isUpperCase() && !sentenceStart && w.length > 1 && !titleCase
+                val capitalMid = w[0].isUpperCase() && !sentenceStart && w.length > 1 && !titleCase &&
+                    base != "de" &&  // German capitalises every noun: that says nothing about names
+                    !(base == "en" && w.lowercase() in commonCapitalised)
                 if (isCamel || allCaps || capitalMid) spans += Span(m.range.first, m.range.last, null)
             }
         }

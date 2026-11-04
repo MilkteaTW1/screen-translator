@@ -80,6 +80,23 @@ def available_languages():
     return [(l.language_tag, l.display_name) for l in OcrEngine.available_recognizer_languages]
 
 
+# Letters the OCR mixes up, giving words that do not exist: "vou" for "you". Only misreadings that are not words themselves.
+CONFUSED_WORDS = {"vou": "you", "vour": "your", "vours": "yours", "vourself": "yourself", "tbe": "the", "tbat": "that",
+                  "tbis": "this", "wbat": "what", "wben": "when", "wbich": "which", "bave": "have", "witb": "with"}
+CONFUSED_RE = re.compile(r"\b(" + "|".join(CONFUSED_WORDS) + r")\b", re.IGNORECASE)
+
+
+def fix_confusions(text, tag):
+    """Corrects the few English words OCR keeps misreading (keeps capitals). Other languages are left alone."""
+    if not tag.lower().startswith("en"):
+        return text
+
+    def fix(m):
+        word, right = m.group(), CONFUSED_WORDS[m.group().lower()]
+        return right.upper() if word.isupper() else right.capitalize() if word[0].isupper() else right
+    return CONFUSED_RE.sub(fix, text)
+
+
 class Recognizer:
     def __init__(self, tag):
         self.tag = tag
@@ -116,6 +133,7 @@ class Recognizer:
                 text = KATAKANA_HYPHEN_RE.sub("ー", text)
             else:  # icons next to text (a chevron, a bullet) come out as stray one-letter "words"
                 text = " ".join(t for t in text.split() if len(t) > 1 or t in LONE_WORDS)
+                text = fix_confusions(text, self.tag)
             lines.append(Line(x0 / scale, y0 / scale, (x1 - x0) / scale, (y1 - y0) / scale, text, 0, self.tag, self.joiner))
         return lines
 

@@ -145,6 +145,21 @@ def looks_like_source(text, ocr_tag, w=None, h=None, skip_names=True):
     return hits / len(letters) >= 0.7  # mostly the chosen language, not OCR noise or mixed text
 
 
+# Capitalised in English but ordinary words to translate: days, months, languages, nationalities.
+COMMON_CAPITALISED = frozenset("""monday tuesday wednesday thursday friday saturday sunday january february march april may june july
+    august september october november december english chinese japanese korean french german spanish italian russian
+    portuguese arabic hindi american british european asian african canadian australian indian mexican""".split())
+
+
+UI_TAILS = frozenset("in up out on off more back now us me all next here free again today".split())  # "Sign In", "Read More"
+
+
+def _shouting(text):
+    """A line in capitals ("FREE SHIPPING ON ORDERS"): the capitals are style, not names."""
+    letters = [c for c in text if c.isalpha()]
+    return len(letters) >= 5 and "_" not in text and sum(c.isupper() for c in letters) / len(letters) >= 0.9
+
+
 def _auto_proper_spans(text, base, keep_katakana):
     spans = []
     if base == "ja" and keep_katakana:
@@ -154,13 +169,17 @@ def _auto_proper_spans(text, base, keep_katakana):
         # "Open File Settings": UI text in Title Case. Those capitals are not names, and protecting
         # them would leave the line almost untranslated.
         title_case = len(words) >= 3 and sum(w[0].isupper() for w in words) / len(words) >= 0.6
+        title_case = title_case or (len(words) == 2 and words[0][0].isupper() and words[1][0].isupper()
+                                    and words[1].lower() in UI_TAILS)  # a button, not a name
         for m in LATIN_WORD_RE.finditer(text):
             w = m.group()
             before = text[: m.start()].rstrip()
             sentence_start = not before or before[-1] in ".!?:\"“"
             camel = bool(re.search(r"[a-z][A-Z]", w))
             allcaps = len(w) >= 2 and w.isupper()
-            capital_mid = w[0].isupper() and not sentence_start and len(w) > 1 and not title_case
+            capital_mid = (w[0].isupper() and not sentence_start and len(w) > 1 and not title_case
+                           and base != "de"  # German capitalises every noun: that says nothing about names
+                           and not (base == "en" and w.lower() in COMMON_CAPITALISED))
             if camel or allcaps or capital_mid:
                 spans.append(m.span())
     return spans
@@ -190,6 +209,13 @@ def protect(text, glossary, base, auto, keep_katakana):
         for m in re.finditer(pattern, text, re.IGNORECASE):
             spans.append((*m.span(), forced))
     if auto:
+        if SCRIPT_RE.get(base) is None and _shouting(text):
+            lowered = text.lower()
+            if len(lowered) == len(text):  # a line in capitals reads as words, not as a row of names; chosen terms keep theirs
+                keep = [False] * len(text)
+                for s, e, _forced in spans:
+                    keep[s:e] = [True] * (e - s)
+                text = "".join(c if k else low for c, low, k in zip(text, lowered, keep))
         spans += [(s, e, None) for s, e in _auto_proper_spans(text, base, keep_katakana)]
     # merge overlaps, keep longest-first order by start
     spans.sort(key=lambda sp: (sp[0], -sp[1]))

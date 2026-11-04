@@ -364,6 +364,35 @@ def test_the_server_address_must_be_http(monkeypatch):
         t._server_json("file:///etc/passwd", {})
 
 
+def _protected(text, base="en", glossary=()):
+    from screen_translator.translator import protect
+    return protect(text, list(glossary), base, True, False)
+
+
+def test_days_and_months_are_translated_not_kept_as_names():
+    protected, originals = _protected("The museum reopened on Saturday after a long break in March.")
+    assert originals == [] and "Saturday" in protected and "March" in protected  # no placeholders: they go to the translator
+    protected, originals = _protected("Yesterday we met Bill Gates at the office on Saturday.")
+    assert originals == ["Bill Gates"]  # a real name is still kept
+
+
+def test_german_nouns_are_not_taken_for_names():
+    protected, originals = _protected("Wir haben gestern den Bericht an die Firma geschickt.", base="de")
+    assert originals == []
+
+
+def test_a_line_in_capitals_is_translated_as_words_but_chosen_terms_keep_their_form():
+    protected, originals = _protected("FREE SHIPPING ON ALL ORDERS")
+    assert originals == [] and protected == "free shipping on all orders"
+    protected, originals = _protected("NVIDIA DRIVERS ARE READY", glossary=["NVIDIA"])
+    assert originals == ["NVIDIA"] and protected.endswith("drivers are ready")
+    assert _protected("The NASA team")[1] == ["NASA"]  # an acronym in a normal line is still kept
+
+
+def test_two_word_buttons_are_not_taken_for_names():
+    for label in ("Sign In", "Log Out", "Read More", "Contact Us"):
+        assert _protected(label)[1] == [], label
+
 def test_why_the_offline_engine_failed_is_kept_so_it_can_be_shown(monkeypatch):
     import screen_translator.translator as t
     tr = t.Translator()

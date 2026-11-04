@@ -801,7 +801,7 @@ class CaptureService : Service() {
     private fun translateMany(texts: List<String>): List<String?> {
         val todo = texts.filter { cache[it] == null && recall(it) == null }
         if (prefs.useGoogle && todo.size > 1) {
-            val prepared = todo.map { it to TextRules.protect(it, glossary, src.script == Script.LATIN) }
+            val prepared = todo.map { it to TextRules.protect(it, glossary, src.script == Script.LATIN, src.code) }
                 .filter { (_, p) -> !TextRules.onlyPlaceholders(p.first) }
             GoogleTranslate.translateMany(prepared.map { it.second.first }, tgt).forEachIndexed { i, out ->
                 if (out != null) finish(prepared[i].first, out, prepared[i].second.second, fromGoogle = true)
@@ -813,7 +813,7 @@ class CaptureService : Service() {
     private fun translate(text: String): String? {
         cache[text]?.let { return it.ifEmpty { null } }
         recall(text)?.let { return it }
-        val (protectedText, originals) = TextRules.protect(text, glossary, src.script == Script.LATIN)
+        val (protectedText, originals) = TextRules.protect(text, glossary, src.script == Script.LATIN, src.code)
         if (TextRules.onlyPlaceholders(protectedText)) {
             cache[text] = ""
             return null
