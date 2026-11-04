@@ -843,7 +843,10 @@ class CaptureService : Service() {
     /** Puts the protected names back, checks the result and caches it. */
     private fun finish(text: String, out: String, originals: List<String>, fromGoogle: Boolean): String? {
         var result = TextRules.restore(out, originals)
-        if (tgt.traditional) result = hansHant?.transliterate(result) ?: result
+        if (tgt.traditional) {
+            result = hansHant?.transliterate(result) ?: result
+            if (!fromGoogle) result = TaiwanWords.convert(this, result)  // Google already writes the way Taiwan does
+        }
         val wantsCjk = tgt.code == "zh" || tgt.code == "ja" || tgt.code == "ko"
         if (result.isEmpty() || result.equals(text, ignoreCase = true) ||
             (wantsCjk && result.none { TextRules.isCjk(it) })) result = ""

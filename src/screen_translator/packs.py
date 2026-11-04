@@ -38,13 +38,29 @@ def tidy_chinese(text):
     return text
 
 
+_TW = {}
+_TW_RE = []
+
+
+def taiwan_words(text):
+    """Mainland wording in Traditional characters becomes the Taiwan one (內存 to 記憶體, 設置 to 設定): the longest match first."""
+    if not _TW_RE:
+        for line in Path(__file__).with_name("tw_words.tsv").read_text(encoding="utf-8").splitlines():
+            if "	" in line:
+                a, b = line.split("	")
+                _TW[a] = b
+        _TW_RE.append(re.compile("|".join(map(re.escape, sorted(_TW, key=len, reverse=True)))))
+    return _TW_RE[0].sub(lambda m: _TW[m.group()], text)
+
+
 def traditional(text):
     """The Chinese pack for Traditional sometimes writes Simplified characters ("新闻"): make them Traditional (Taiwan wording)."""
     try:
         import zhconv
-        return zhconv.convert(text, "zh-tw")
+        text = zhconv.convert(text, "zh-tw")
     except Exception:
-        return text
+        pass
+    return taiwan_words(text)
 
 
 def _pack_dirs():
