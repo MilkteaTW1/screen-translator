@@ -24,3 +24,16 @@ def test_a_sentence_cut_off_at_a_comma_is_translated_clause_by_clause(monkeypatc
     out = packs.translate_many(["first part, second part"], "en", "ja")
     assert calls[1] == ["first part,", "second part"]
     assert out == ["FIRST PART, SECOND PART"]
+
+
+def test_mainland_wording_becomes_taiwan_wording():
+    assert packs.taiwan_words("在設置裡單擊內存，運行應用程序") == "在設定裡點選記憶體，執行應用程式"
+    assert packs.taiwan_words("本周三") == "本週三"
+    assert packs.traditional("在设置里增加内存") == "在設定裡增加記憶體"
+
+
+def test_phone_and_computer_use_the_same_word_table():
+    from pathlib import Path
+    root = Path(__file__).resolve().parent.parent
+    assert (root / "src/screen_translator/tw_words.tsv").read_bytes() == \
+        (root / "android/app/src/main/assets/tw_words.tsv").read_bytes()

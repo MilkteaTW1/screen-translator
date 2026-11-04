@@ -207,11 +207,15 @@ class SpeechEngine(
         if (spoken == target.code) return ""
         return try {
             val (protectedText, originals) = TextRules.protect(said, glossary, false)
-            var out = (if (useGoogle) GoogleTranslate.translate(protectedText, target) else null)
+            val google = if (useGoogle) GoogleTranslate.translate(protectedText, target) else null
+            var out = google
                 ?: offline(spoken)?.let { Tasks.await(it.translate(protectedText), 20, TimeUnit.SECONDS) }
                 ?: run { reportTrouble(""); return "" }
             out = TextRules.restore(out, originals)
-            if (target.traditional) out = hansHant?.transliterate(out) ?: out
+            if (target.traditional) {
+                out = hansHant?.transliterate(out) ?: out
+                if (google == null) out = TaiwanWords.convert(context, out)  // the offline model writes mainland wording
+            }
             toldTrouble = null
             out
         } catch (e: Exception) {
