@@ -186,14 +186,17 @@ class Overlay(QWidget):
         size = max(14, min(28, int(line_height * 0.85)))
         font = QFont("Microsoft JhengHei UI")
         if mode == "cover":
-            # Hide the whole source block, and keep the text readable: widen (then grow) the box rather than
-            # shrinking the letters until nobody can read them.
+            # Hide the whole source block and stay inside its width (a translation that sticks out over the
+            # page's margins and neighbours looks broken): make the letters a little smaller until the text fits
+            # the block, down to a readable minimum, and only then let the box grow taller.
+            w = min(max(src.width() * 1.04, 40), self.width() - src.x() - 4)
             size = max(size, 15)
-            font.setPixelSize(size)
-            metrics = QFontMetricsF(font)
-            natural = metrics.horizontalAdvance(text) + 14
-            w = min(max(src.width(), 40, min(natural, src.width() * 1.6)), self.width() - src.x() - 4)
-            th = metrics.boundingRect(QRectF(0, 0, w - 12, 10000), int(Qt.TextWordWrap), text).height() + 4
+            while True:
+                font.setPixelSize(size)
+                th = QFontMetricsF(font).boundingRect(QRectF(0, 0, w - 12, 10000), int(Qt.TextWordWrap), text).height() + 4
+                if th <= src.height() or size <= 12:
+                    break
+                size -= 1
             return QRectF(src.x(), src.y(), w, max(src.height(), th)), font
         font.setPixelSize(size)
         maxw = min(max(src.width(), 260), self.width() - 8)
