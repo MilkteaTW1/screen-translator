@@ -1,0 +1,36 @@
+{
+  "google": {
+    "sentences": {
+      "ui": 72.6,
+      "news": 42.1,
+      "tech": 39.2,
+      "casual": 36.9,
+      "ambiguous": 32.4
+    },
+    "sentences_all": 44.6,
+    "no_answer": 0,
+    "seconds": 2.3,
+    "paragraphs": {
+      "whole": 40.2,
+      "by_sentence": 43.5,
+      "by_line": 31.2
+    }
+  },
+  "offline": {
+    "sentences": {
+      "ui": 40.8,
+      "news": 22.9,
+      "tech": 23.3,
+      "casual": 20.6,
+      "ambiguous": 21.0
+    },
+    "sentences_all": 25.7,
+    "no_answer": 0,
+    "seconds": 1.1,
+    "paragraphs": {
+      "whole": 29.1,
+      "by_sentence": 31.6,
+      "by_line": 19.9
+    }
+  }
+}
