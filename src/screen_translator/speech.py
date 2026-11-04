@@ -258,14 +258,16 @@ class SpeechWorker(QObject):
             except Exception as e:
                 self.status.emit(t("speech_error", err=e))
 
-    def _translate(self, text, code):
+    def _translate(self, text, code, online=True):
         s = self.settings
         target = s["target"]
         if code == target.split("-")[0].lower():
             return ""
         glossary = [t.strip() for t in s["glossary"].splitlines() if t.strip()]
         translation = self.translator.translate(
-            text, {"zh": "zh-CN"}.get(code, code), target, code, glossary, s["auto_proper"], s["keep_katakana"]) or ""
+            text, {"zh": "zh-CN"}.get(code, code), target, code, glossary, s["auto_proper"], s["keep_katakana"], online) or ""
+        if not online:
+            return translation  # a draft: whatever is wrong is told when the finished sentence is translated
         if not translation and self.translator.missing_packs:
             need = ", ".join(f"{a}→{b}" for a, b in sorted(self.translator.missing_packs))
             self.status.emit(t("speech_packs_needed", names=need))
@@ -293,7 +295,8 @@ class SpeechWorker(QObject):
         now = time.monotonic()
         if now - self._live_translated_at >= LIVE_TRANSLATE_EVERY:  # not every new word: that is a request each
             self._live_translated_at = now
-            self._live_translation = (epoch, self._translate(text, info.language))
+            # a local draft while the sentence is still being said; the finished sentence goes to Google once
+            self._live_translation = (epoch, self._translate(text, info.language, online=False))
         translation = self._live_translation[1] if self._live_translation[0] == epoch else ""
         if self.running:
             self.partial.emit(text, translation)

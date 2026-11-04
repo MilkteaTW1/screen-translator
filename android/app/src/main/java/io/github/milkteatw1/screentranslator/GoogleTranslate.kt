@@ -50,9 +50,24 @@ object GoogleTranslate {
         return if (lines != null && lines.size == count) lines.map { it.trim().ifEmpty { null } } else List(count) { null }
     }
 
+    private const val BUDGET = 24  // requests allowed per BUDGET_WINDOW_MS: more than that and Google starts refusing this phone
+    private const val BUDGET_WINDOW_MS = 60_000L
+    private val sent = ArrayDeque<Long>()
+
+    /** Whether one more request fits in the budget at [now] (and counts it as made); what does not goes offline. */
+    @Synchronized fun takeSlot(now: Long = SystemClock.uptimeMillis(), budget: Int = BUDGET): Boolean {
+        while (sent.isNotEmpty() && now - sent.first() >= BUDGET_WINDOW_MS) sent.removeFirst()
+        if (sent.size >= budget) return false
+        sent.addLast(now)
+        return true
+    }
+
+    @Synchronized fun resetBudget() = sent.clear()
+
     /** The translation, or null when Google can't be reached (the caller falls back to offline translation). */
     fun translate(text: String, target: Lang): String? {
         if (SystemClock.uptimeMillis() < retryAt) return null
+        if (!takeSlot()) return null
         return try {
             val url = URL("https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&dt=t&tl=" +
                 URLEncoder.encode(code(target), "UTF-8"))
