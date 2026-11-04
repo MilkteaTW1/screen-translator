@@ -29,8 +29,8 @@ SOFT_PAUSE = 0.25
 MAX_SEGMENT = 12.0  # seconds: cut here whatever happens so captions keep up
 MIN_SPEECH = 0.4  # seconds: shorter sounds are clicks, not speech
 MAX_BACKLOG = 3  # utterances waiting for transcription; older ones are dropped to stay real-time
-LIVE_TRANSLATE_EVERY = 2.0  # seconds between translations of the sentence being spoken: one request per word got Google to refuse everything
-PARTIAL_STEP = 0.8  # seconds of new speech between live updates of the sentence being spoken
+LIVE_TRANSLATE_EVERY = 1.0  # seconds between translations of the sentence being spoken: one request per word got Google to refuse everything
+PARTIAL_STEP = 0.5  # seconds of new speech between live updates of the sentence being spoken
 
 
 def whisper_model_class():
