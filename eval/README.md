@@ -21,3 +21,14 @@ The pages are clean browser renderings in a few layouts, not real websites, so r
 not covered. The box runs use a stand-in translator and clock, so OCR and network delays are left out, and translation quality
 is not measured at all. The Android app is not covered. `tests/test_eval.py` covers English only (CI has English OCR, and skips
 those tests on a machine without it); the Chinese, Japanese and automatic-language scores come from `run_eval.py`.
+
+## Translation quality
+
+`run_translation_eval.py` (sentences in `translation_set.py`, results in `translation_baseline.json`) translates 46 English sentences
+(interface text, news, technical text, casual speech, ambiguous words) and 6 paragraphs into Traditional Chinese with Google and with
+the offline engine, and scores them with chrF against one reference each. `--dump file.json` writes every output next to its reference.
+
+The text goes to Google, and Google's answers change over time, so this is a tool for reading and comparing, not a test that can fail.
+chrF with one reference is low even for good translations (many correct wordings exist): read the outputs, do not trust the number
+alone. The references were written for this set. The paragraph rows compare the paragraph whole, sentence by sentence, and line by
+line as a page wraps it (the app already joins wrapped lines into paragraphs, so the line-by-line row is the case where that fails).

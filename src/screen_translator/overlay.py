@@ -254,6 +254,7 @@ class CaptionOverlay(QWidget):
                          self.width_px, 450)
         self.lines = []  # (time, said, translation)
         self.live = None  # (said, translation) of the sentence still being spoken
+        self.live_at = 0.0
         self.timer = QTimer(self)
         self.timer.timeout.connect(self._expire)
         self.timer.start(1000)
@@ -268,6 +269,7 @@ class CaptionOverlay(QWidget):
     def set_live(self, said, translation):
         """The sentence so far, updated as it is spoken ('' removes it)."""
         self.live = (said, translation) if said else None
+        self.live_at = time.monotonic()
         if self.live:
             self.show()
         elif not self.lines:
@@ -281,7 +283,10 @@ class CaptionOverlay(QWidget):
 
     def _expire(self):
         keep = [l for l in self.lines if time.monotonic() - l[0] < self.LIFETIME]
-        if len(keep) != len(self.lines):
+        stale = self.live is not None and time.monotonic() - self.live_at > self.LIFETIME  # speech stopped mid-sentence
+        if stale:
+            self.live = None
+        if len(keep) != len(self.lines) or stale:
             self.lines = keep
             if not keep and not self.live:
                 self.hide()

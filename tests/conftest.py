@@ -30,3 +30,10 @@ def no_real_translation_memory(monkeypatch, tmp_path):
     """Tests never read or write the translations remembered on this machine."""
     from screen_translator import app
     monkeypatch.setattr(app, "CACHE_PATH", tmp_path / "translations.jsonl")
+
+
+@pytest.fixture(autouse=True)
+def no_real_settings(monkeypatch, tmp_path):
+    """Tests never read or write this machine's settings file (changing a switch in a test saves it)."""
+    from screen_translator import app
+    monkeypatch.setattr(app, "SETTINGS_PATH", tmp_path / "settings.json")

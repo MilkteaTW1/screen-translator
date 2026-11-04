@@ -417,6 +417,9 @@ class Translator:
         self.disk = None  # a DiskCache, if translations are to be remembered
         self.server = None  # {"kind", "url", "key", "model"}: the user's own server, tried after Google, before offline
         self._server_down = 0.0
+        self.unserved = False  # the last batch left some text without any translation
+        self.google_error = None  # why the last Google request failed (None: it did not, or was not tried)
+        self.offline_error = None  # why the offline engine failed, if it threw (a missing pack is not an error)
         self._server_fails = 0
         self._fails = 0  # failures in a row
         self._limits = 0  # "too many requests" in a row
@@ -460,10 +463,12 @@ class Translator:
                 if lines is not None:
                     return list(zip((g[0] for g in group), lines))
                 return [(g[0], google_translate(g[2], src, dst)) for g in group]  # lines got mixed up: one by one
-            except RateLimited:
+            except RateLimited as e:
                 limited.append(1)
+                self.google_error = str(e)
                 return [(g[0], None) for g in group]
-            except Exception:
+            except Exception as e:
+                self.google_error = f"{type(e).__name__}: {e}"
                 return [(g[0], None) for g in group]
 
         done = dict(pair for part in _GOOGLE_POOL.map(one, groups) for pair in part)
@@ -475,6 +480,7 @@ class Translator:
             self._google_down = time.monotonic() + min(self.RETRY_AFTER, 5.0 * self._fails)
         elif any(done.values()):
             self._fails = self._limits = 0
+            self.google_error = None
         return {i: out for i, out in done.items() if out}
 
     def _server_many(self, items, src, dst):
@@ -497,6 +503,25 @@ class Translator:
             self._server_fails += 1
             self._server_down = time.monotonic() + min(60.0, 10.0 * self._server_fails)
         return done
+
+    def problem(self):
+        """(kind, detail) for why text was read but not translated, or None when nothing is wrong. One answer, the
+        likeliest, so the user gets one message: 'packs' (no offline pack and Google is off), 'refused' (Google says no),
+        'network' (cannot reach Google), 'offline' (the offline engine broke), 'other'."""
+        if not self.unserved:
+            return None
+        state = self.google_state()
+        if self.missing_packs and state == "off":
+            return "packs", ", ".join(f"{a}>{b}" for a, b in sorted(self.missing_packs))
+        if self.offline_error:
+            return "offline", self.offline_error
+        if state == "limited":
+            return "refused", ""
+        if state == "unreachable":
+            return "network", self.google_error or ""
+        if self.missing_packs:
+            return "packs", ", ".join(f"{a}>{b}" for a, b in sorted(self.missing_packs))
+        return "other", self.google_error or ""
 
     def google_state(self):
         """Why Google is not being used right now: 'off', 'limited', 'unreachable', or 'ok' (it will be tried)."""
@@ -565,9 +590,12 @@ class Translator:
                     offline = self._argos_many([item[2] for item in rest], src, dst)
                 for item, out in zip(rest, offline):
                     outs[item[0]] = out
-            except Exception:
-                pass  # left out of `outs`: not cached, so they are tried again
+                if any(offline):
+                    self.offline_error = None
+            except Exception as e:
+                self.offline_error = f"{type(e).__name__}: {e}"  # shown to the user: otherwise nothing says why
             self.engine = engine
+        self.unserved = any(not outs.get(item[0]) for item in todo)
         for i, text, protected, originals in todo:
             if i not in outs:
                 continue
@@ -579,3 +607,30 @@ class Translator:
             if self.disk and results[i] and i in from_google:
                 self.disk.put(text, src, dst, sig, results[i])
         return results
+
+
+def diagnose(dst, src="en"):
+    """Plain text saying what works: Google, the offline engine, the packs on disk. For the "test translation" button
+    and for bug reports: the app otherwise keeps quiet about why a translation did not come."""
+    lines = []
+    try:
+        lines.append(f"Google: OK ({google_translate('Hello world.', src, dst)})")
+    except RateLimited as e:
+        lines.append(f"Google: refused ({e}) - it does not want to answer this computer for now")
+    except Exception as e:
+        lines.append(f"Google: failed ({type(e).__name__}: {e})")
+    missing = missing_pairs(src, dst)
+    if missing:
+        lines.append("Offline: language pack missing: " + ", ".join(f"{a}>{b}" for a, b in sorted(missing)))
+    else:
+        try:
+            out = Translator()._argos_many(["Hello world."], src, dst)[0]
+            lines.append(f"Offline: OK ({out})" if out else "Offline: answered nothing")
+        except Exception as e:
+            lines.append(f"Offline: failed ({type(e).__name__}: {e})")
+    try:
+        lines.append("Packs on disk: " + (", ".join(f"{a}>{b}" for a, b in sorted(packs.installed_pairs())) or "none")
+                     + f"  ({packs.PACK_DIR})")
+    except Exception as e:
+        lines.append(f"Packs on disk: unreadable ({e})")
+    return "\n".join(lines)

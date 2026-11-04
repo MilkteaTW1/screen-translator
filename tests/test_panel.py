@@ -118,3 +118,61 @@ def test_translations_can_be_hidden_while_the_page_scrolls_and_come_back_when_it
         assert [i[4] for i in worker._snapshot()] == [shown]
     worker.scrolling_until = 0.0  # it stopped
     assert [i[4] for i in worker._snapshot()] == ["你好"]
+
+
+def _closing(monkeypatch):
+    from PySide6.QtWidgets import QSystemTrayIcon
+    QApplication.instance() or QApplication([])
+    monkeypatch.setattr(QSystemTrayIcon, "isSystemTrayAvailable", staticmethod(lambda: True))
+    quits = []
+    monkeypatch.setattr(appmod.QApplication, "quit", staticmethod(lambda: quits.append(1)))
+    panel = appmod.Panel(appmod.Worker(appmod.LANGUAGES), _Overlay(), appmod.LANGUAGES)
+    hidden = []
+    panel.hidden_to_tray.connect(lambda: hidden.append(1))
+    return panel, hidden, quits
+
+
+def test_the_x_button_asks_the_first_time_and_remembers_the_answer(monkeypatch):
+    from PySide6.QtGui import QCloseEvent
+    panel, hidden, quits = _closing(monkeypatch)
+    answers = iter(["tray"])
+    monkeypatch.setattr(panel, "_ask_close", lambda: next(answers))
+    assert panel.close_action.currentData() == "ask"
+    event = QCloseEvent()
+    panel.closeEvent(event)
+    assert not event.isAccepted() and hidden == [1] and quits == []
+    assert panel.close_action.currentData() == "tray"  # remembered
+    event = QCloseEvent()
+    panel.closeEvent(event)  # no question the second time
+    assert not event.isAccepted() and hidden == [1, 1]
+
+
+def test_choosing_to_quit_everything_quits_and_cancelling_does_nothing(monkeypatch):
+    from PySide6.QtGui import QCloseEvent
+    panel, hidden, quits = _closing(monkeypatch)
+    monkeypatch.setattr(panel, "_ask_close", lambda: None)  # cancel
+    event = QCloseEvent()
+    panel.closeEvent(event)
+    assert not event.isAccepted() and hidden == [] and quits == [] and panel.close_action.currentData() == "ask"
+    monkeypatch.setattr(panel, "_ask_close", lambda: "quit")
+    event = QCloseEvent()
+    panel.closeEvent(event)
+    assert event.isAccepted() and quits == [1]
+
+
+def test_the_user_is_told_once_per_kind_of_trouble_and_again_after_it_worked_in_between():
+    QApplication.instance() or QApplication([])
+    worker = appmod.Worker(appmod.LANGUAGES)
+    told = []
+    worker.problem.connect(told.append)
+    worker.translator.unserved = True
+    worker.translator.google = True
+    worker.translator._google_down, worker.translator._limits = 1e12, 1
+    for _ in range(5):  # the same trouble on every scan: one message
+        worker._report_problem()
+    assert len(told) == 1 and "Google" in told[0]
+    worker.translator.unserved = False  # it worked
+    worker._report_problem()
+    worker.translator.unserved = True
+    worker._report_problem()
+    assert len(told) == 2

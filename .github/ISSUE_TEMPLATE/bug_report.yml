@@ -14,7 +14,7 @@ body:
     id: version
     attributes:
       label: screen-translator version
-      placeholder: "v0.5.21"
+      placeholder: "v0.5.22"
     validations:
       required: true
   - type: input
