@@ -37,3 +37,10 @@ def test_phone_and_computer_use_the_same_word_table():
     root = Path(__file__).resolve().parent.parent
     assert (root / "src/screen_translator/tw_words.tsv").read_bytes() == \
         (root / "android/app/src/main/assets/tw_words.tsv").read_bytes()
+
+
+def test_output_that_repeats_itself_is_dropped():
+    assert packs._runaway("維護" + "文將" * 30)
+    assert packs._runaway("a" * 12)
+    assert not packs._runaway("這是一個正常的句子，沒有重複。")
+    assert not packs._runaway("哈哈哈")  # a short laugh is not a runaway

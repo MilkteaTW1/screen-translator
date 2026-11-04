@@ -124,5 +124,7 @@
   "better_text": "這會使用較大的語言模型(Qwen2.5 1.5B),翻譯比較自然,也能處理成語和一字多義,但需要下載 {mb} MB、佔用更多記憶體,速度也比標準語言包慢。它在您的電腦上執行。要現在下載嗎?",
   "better_downloading": "正在下載更好的離線模型……",
   "better_progress": "正在下載更好的離線模型……{pct}%",
-  "better_ready": "更好的離線模型已就緒。"
+  "better_ready": "更好的離線模型已就緒。",
+  "status_server_error": "您的伺服器/Gemini 沒有回應,改用其他引擎:{err}",
+  "gemini_help": "Gemini 金鑰哪裡拿:1) 開啟 <a href=\"https://aistudio.google.com/apikey\">aistudio.google.com/apikey</a>,用 Google 帳號登入;2) 按「Create API key」;3) 複製金鑰,貼到上面的「API 金鑰」欄。一開始免費。文字會用您的金鑰傳給 Google。"
 }

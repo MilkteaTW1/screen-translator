@@ -38,6 +38,14 @@ def tidy_chinese(text):
     return text
 
 
+RUNAWAY_RE = re.compile(r"(.{1,8}?)\1{5,}", re.DOTALL)
+
+
+def _runaway(text):
+    """Output where one short piece repeats over and over ("文將文將文將..."): a small model that lost its way."""
+    return bool(RUNAWAY_RE.search(text))
+
+
 _TW = {}
 _TW_RE = []
 
@@ -118,6 +126,7 @@ def translate_many(texts, src, dst):
     if not flat:
         return [""] * len(texts)
     decoded = _run(translator, sp, prefix, flat)
+    decoded = ["" if _runaway(d) else d for d in decoded]  # the engine stuck repeating itself: no translation beats noise
     # The engine sometimes stops at a comma and drops the rest of the sentence: translate such sentences clause by clause.
     cut = [i for i, d in enumerate(decoded) if CUT_OFF_RE.search(d) and not CUT_OFF_RE.search(flat[i])]
     if cut:
