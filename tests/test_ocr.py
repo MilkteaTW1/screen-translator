@@ -27,3 +27,11 @@ def test_prepare_inverts_dark_pictures_and_enlarges_small_ones():
     light = np.full((2160, 3840, 4), 255, np.uint8)
     data, w, h, scale = ocr.prepare(light.tobytes(), 3840, 2160)
     assert (w, h, scale) == (3840, 2160, 1.0) and data[0] == 255  # a big screen is not enlarged
+
+
+def test_words_ocr_keeps_misreading_are_corrected_in_english_only():
+    from screen_translator.ocr import fix_confusions
+    assert fix_confusions("Thank vou, vour order is ready", "en-US") == "Thank you, your order is ready"
+    assert fix_confusions("VOU WIN. Vou win. tbe end", "en-GB") == "YOU WIN. You win. the end"
+    assert fix_confusions("vou", "de-DE") == "vou"  # not English: left alone
+    assert fix_confusions("Vouchers and covered", "en-US") == "Vouchers and covered"  # real words are not touched

@@ -68,4 +68,28 @@ class TextRulesTest {
         assertEquals(listOf("執行緒"), originals)
         assertTrue(p.contains("Threading"))
     }
+
+    @Test fun daysAndMonthsAreTranslatedNotKeptAsNames() {
+        val (_, originals) = TextRules.protect("The museum reopened on Saturday after a long break in March.", emptyList(), true, "en")
+        assertEquals(emptyList<String>(), originals)
+    }
+
+    @Test fun germanNounsAreNotTakenForNames() {
+        val (_, originals) = TextRules.protect("Wir haben gestern den Bericht an die Firma geschickt.", emptyList(), true, "de")
+        assertEquals(emptyList<String>(), originals)
+    }
+
+    @Test fun aLineInCapitalsIsWordsAndChosenTermsKeepTheirForm() {
+        val (plain, none) = TextRules.protect("FREE SHIPPING ON ALL ORDERS", emptyList(), true)
+        assertEquals("free shipping on all orders", plain)
+        assertEquals(emptyList<String>(), none)
+        val (_, chosen) = TextRules.protect("NVIDIA DRIVERS ARE READY", listOf("NVIDIA"), true)
+        assertEquals(listOf("NVIDIA"), chosen)
+        assertEquals(listOf("NASA"), TextRules.protect("The NASA team", emptyList(), true).second)
+    }
+
+    @Test fun twoWordButtonsAreNotTakenForNames() {
+        for (label in listOf("Sign In", "Log Out", "Read More", "Contact Us"))
+            assertEquals(label, emptyList<String>(), TextRules.protect(label, emptyList(), true).second)
+    }
 }
