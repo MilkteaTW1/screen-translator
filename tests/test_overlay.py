@@ -73,3 +73,16 @@ def test_a_cover_takes_the_colour_of_the_page_it_hides_and_readable_ink():
         assert ov.modes["翻譯"] == "cover"
         assert (fill.red(), fill.green(), fill.blue()) == page
         assert (ink.red() < 128) == ink_is_dark
+
+
+def test_a_cover_stays_within_the_width_of_the_text_it_covers():
+    from PySide6.QtCore import QRectF
+    app = QApplication.instance() or QApplication([])
+    ov = Overlay(app.primaryScreen())
+    ov.scale = 1.0
+    ov.setGeometry(0, 0, 1600, 600)
+    long = "這是一段很長很長的翻譯文字，比原文所佔的寬度還要長許多，所以應該縮小字體或是換行，而不是向旁邊伸出去。" * 2
+    ov.modes[long] = "cover"
+    rect, font = ov._box(long, QRectF(100, 100, 300, 40), 20, "cover")
+    assert rect.width() <= 300 * 1.04 + 0.5
+    assert rect.x() == 100 and font.pixelSize() >= 12
