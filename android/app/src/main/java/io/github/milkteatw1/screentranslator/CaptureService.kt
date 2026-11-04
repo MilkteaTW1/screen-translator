@@ -132,6 +132,7 @@ class CaptureService : Service() {
     private var velocityY = 0f  // px/s the page is scrolling (down is positive)
     private var lastFollowAt = 0L
     @Volatile private var scrollUntil = 0L
+    @Volatile private var toldTrouble: String? = null  // the kind of trouble the user was already told about
     private var hiddenForScroll = false  // translations are not drawn right now because the page is scrolling
     private var epoch = 0  // bumped when what a running OCR would find is no longer valid (the page was replaced)
     @Volatile private var ocrBusy = false
@@ -357,9 +358,10 @@ class CaptureService : Service() {
     private fun setUpSpeech(intent: Intent) {
         val engine = SpeechEngine(
             this, prefs.spokenLanguage, prefs.whisperModel, tgt, glossary, prefs.useGoogle,
-            onPartial = { said, translation -> overlay?.partial = said to translation },
+            // late results of an engine that was stopped must not put captions back on the screen
+            onPartial = { said, translation -> if (this@CaptureService.speech != null) overlay?.partial = said to translation },
             onLine = { said, translated ->
-                synchronized(captions) {
+                if (this@CaptureService.speech != null) synchronized(captions) {
                     captions.add(said to translated)
                     while (captions.size > MAX_CAPTIONS) captions.removeAt(0)
                     overlay?.captions = captions.toList()
@@ -821,9 +823,18 @@ class CaptureService : Service() {
             Tasks.await(translator!!.translate(protectedText), 20, TimeUnit.SECONDS)
         } catch (e: Exception) {
             Log.w(TAG, "translate failed: ${e.message}")
+            reportTrouble(e.message ?: "")
             return null  // e.g. the language data is not downloaded yet: don't cache
         }
         return finish(text, out, originals, fromGoogle = google != null)
+    }
+
+    /** Text was read but nothing could translate it: tell the user once why (again only after it worked in between). */
+    private fun reportTrouble(detail: String) {
+        val kind = Trouble.kind(prefs.useGoogle, GoogleTranslate.state())
+        if (kind == toldTrouble) return
+        toldTrouble = kind
+        main.post { android.widget.Toast.makeText(this, Trouble.text(this, kind, detail), android.widget.Toast.LENGTH_LONG).show() }
     }
 
     /** A translation remembered from an earlier run, if there is one. */
@@ -837,6 +848,7 @@ class CaptureService : Service() {
         if (result.isEmpty() || result.equals(text, ignoreCase = true) ||
             (wantsCjk && result.none { TextRules.isCjk(it) })) result = ""
         cache[text] = result
+        if (result.isNotEmpty()) toldTrouble = null  // it works again: the next trouble is told too
         if (fromGoogle && result.isNotEmpty()) memory?.put(memoryScope, text, result)
         return result.ifEmpty { null }
     }

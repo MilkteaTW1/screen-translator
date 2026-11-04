@@ -73,6 +73,7 @@ class _Model:
 
 def worker(monkeypatch):
     w = speech.SpeechWorker()
+    w.running = True
     w.settings = {"speech_lang": "en", "target": "zh-TW", "glossary": "", "auto_proper": True, "keep_katakana": False}
     monkeypatch.setattr(w.translator, "translate", lambda text, *a: "譯:" + text)
     seen = []
@@ -99,3 +100,38 @@ def test_a_live_update_for_a_sentence_that_already_ended_is_dropped(monkeypatch)
     w.epoch += 1  # the sentence finished while the live update was being made
     w._show_live(_Model("old words"))
     assert seen == []
+
+
+def test_nothing_is_shown_after_speech_was_stopped(monkeypatch):
+    w, seen = worker(monkeypatch)
+    model = _Model("When you are traveling")
+    w.live = (w.epoch, voice(2, 0.1))
+    w.running = False  # stopped while the sentence was being read
+    w._show_live(model)
+    w._handle(model, voice(3, 0.1))
+    assert seen == []
+
+
+def test_the_sentence_being_spoken_is_not_sent_for_translation_with_every_new_word(monkeypatch):
+    w, seen = worker(monkeypatch)
+    sent = []
+    monkeypatch.setattr(w.translator, "translate", lambda text, *a: sent.append(text) or "譯:" + text)
+    for text in ("When", "When you", "When you are", "When you are traveling"):
+        w.live = (w.epoch, voice(2, 0.1))
+        w._show_live(_Model(text))
+    assert len(sent) == 1  # one request, not four
+    assert [s[1] for s in seen] == ["When", "When you", "When you are", "When you are traveling"]  # the words still follow
+    assert all(s[2] == "譯:When" for s in seen)  # beside the translation made a moment ago
+
+
+def test_a_caption_line_that_nothing_replaces_goes_away_too():
+    import os
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication
+    from screen_translator.overlay import CaptionOverlay
+    app = QApplication.instance() or QApplication([])
+    c = CaptionOverlay(app.primaryScreen())
+    c.set_live("half a sentence", "")
+    c.live_at -= c.LIFETIME + 1  # speech stopped mid-sentence long ago
+    c._expire()
+    assert c.live is None

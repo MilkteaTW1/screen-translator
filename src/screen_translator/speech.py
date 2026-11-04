@@ -29,6 +29,7 @@ SOFT_PAUSE = 0.25
 MAX_SEGMENT = 12.0  # seconds: cut here whatever happens so captions keep up
 MIN_SPEECH = 0.4  # seconds: shorter sounds are clicks, not speech
 MAX_BACKLOG = 3  # utterances waiting for transcription; older ones are dropped to stay real-time
+LIVE_TRANSLATE_EVERY = 2.0  # seconds between translations of the sentence being spoken: one request per word got Google to refuse everything
 PARTIAL_STEP = 0.8  # seconds of new speech between live updates of the sentence being spoken
 
 
@@ -173,6 +174,8 @@ class SpeechWorker(QObject):
         self.utterances = queue.Queue()
         self.live = None  # (epoch, audio of the sentence so far): only the latest is kept
         self.epoch = 0  # counts finished sentences, so a late live update of a finished one is dropped
+        self._live_translated_at = 0.0
+        self._live_translation = (-1, "")  # (epoch, translation) shown beside the words until the next one is made
 
     def configure(self, settings):
         self.settings = settings
@@ -244,7 +247,10 @@ class SpeechWorker(QObject):
             try:
                 audio = self.utterances.get(timeout=0.1)
             except queue.Empty:
-                self._show_live(model)  # nothing finished: work on the sentence being spoken
+                try:
+                    self._show_live(model)  # nothing finished: work on the sentence being spoken
+                except Exception as e:  # one bad reading must not end the captions for good
+                    self.status.emit(t("speech_error", err=e))
                 continue
             try:
                 self._handle(model, audio)
@@ -262,6 +268,8 @@ class SpeechWorker(QObject):
         if not translation and self.translator.missing_packs:
             need = ", ".join(f"{a}→{b}" for a, b in sorted(self.translator.missing_packs))
             self.status.emit(t("speech_packs_needed", names=need))
+        elif not translation and (why := self.translator.offline_error or self.translator.google_error):
+            self.status.emit(t("speech_no_translation", err=why[:160]))  # heard, but nothing to show: say why
         return translation
 
     def _show_live(self, model):
@@ -273,19 +281,31 @@ class SpeechWorker(QObject):
         epoch, audio = live
         language = None if self.settings["speech_lang"] == "auto" else self.settings["speech_lang"]
         text, info = transcribe(model, audio, language)
+        if not self.running:
+            return  # stopped while this was being read: it must not put a caption back on the screen
         if not text or epoch != self.epoch:  # the sentence ended while we were working: its final version is coming
             return
         last = getattr(self, "_last_live", (-1, ""))
         if last[0] == epoch and len(text) < 0.6 * len(last[1]) and not last[1].startswith(text):
             return  # a reading far shorter than the last one and not a part of it: a stumble, keep what is shown
         self._last_live = (epoch, text)
-        self.partial.emit(text, self._translate(text, info.language))
+        now = time.monotonic()
+        if now - self._live_translated_at >= LIVE_TRANSLATE_EVERY:  # not every new word: that is a request each
+            self._live_translated_at = now
+            self._live_translation = (epoch, self._translate(text, info.language))
+        translation = self._live_translation[1] if self._live_translation[0] == epoch else ""
+        if self.running:
+            self.partial.emit(text, translation)
 
     def _handle(self, model, audio):
         s = self.settings
         language = None if s["speech_lang"] == "auto" else s["speech_lang"]
         text, info = transcribe(model, audio, language, beam=2)  # the finished sentence gets the careful pass
+        if not self.running:
+            return
         if not text:
             self.partial.emit("", "")  # nothing real was said: drop the live line
             return
-        self.line.emit(text, self._translate(text, info.language))
+        translation = self._translate(text, info.language)
+        if self.running:  # translating can take a while: it may have been stopped meanwhile
+            self.line.emit(text, translation)

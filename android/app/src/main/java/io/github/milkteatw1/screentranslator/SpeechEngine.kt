@@ -41,6 +41,7 @@ class SpeechEngine(
         private const val RATE = 16000
         private const val CHUNK = RATE / 10  // 0.1 s
         private const val LIVE_STEP = 0.3  // seconds of new speech between live updates: each new word shows up as soon as the phone has read it
+        private const val LIVE_TRANSLATE_MS = 2000L  // between translations of the sentence being spoken: one request per word got Google to refuse everything
         private const val MAX_BACKLOG = 3  // finished sentences waiting; more are dropped to stay real-time
     }
 
@@ -50,6 +51,9 @@ class SpeechEngine(
     private val translating = Executors.newSingleThreadExecutor()  // translation, beside Whisper so listening never waits for the network
     @Volatile private var backlog = 0
     @Volatile private var liveBusy = false
+    @Volatile private var liveTranslatedAt = 0L
+    @Volatile private var liveOut = "" to -1  // the translation shown beside the words until the next one is made
+    @Volatile private var toldTrouble: String? = null
     @Volatile private var sentence = 0  // counts finished sentences: a late live update of an old one is dropped
     private val translators = HashMap<String, Translator>()  // offline translators by spoken language
     private var hansHant: android.icu.text.Transliterator? = null
@@ -168,10 +172,17 @@ class SpeechEngine(
                 if (heard != null && forSentence == sentence && !stumble(heard.second)) {
                     val (code, text) = heard
                     lastLive = text to forSentence
-                    onPartial(text, "")
-                    translating.execute {
-                        val out = translate(text, code)
-                        if (forSentence == sentence && out.isNotEmpty()) onPartial(text, out)
+                    onPartial(text, if (liveOut.second == forSentence) liveOut.first else "")
+                    val now = SystemClock.uptimeMillis()
+                    if (now - liveTranslatedAt >= LIVE_TRANSLATE_MS) {  // not every new word: that is a request each
+                        liveTranslatedAt = now
+                        translating.execute {
+                            val out = translate(text, code)
+                            if (forSentence == sentence && out.isNotEmpty()) {
+                                liveOut = out to forSentence
+                                onPartial(text, out)
+                            }
+                        }
                     }
                 }
             } catch (e: Throwable) {
@@ -198,14 +209,24 @@ class SpeechEngine(
             val (protectedText, originals) = TextRules.protect(said, glossary, false)
             var out = (if (useGoogle) GoogleTranslate.translate(protectedText, target) else null)
                 ?: offline(spoken)?.let { Tasks.await(it.translate(protectedText), 20, TimeUnit.SECONDS) }
-                ?: return ""
+                ?: run { reportTrouble(""); return "" }
             out = TextRules.restore(out, originals)
             if (target.traditional) out = hansHant?.transliterate(out) ?: out
+            toldTrouble = null
             out
         } catch (e: Exception) {
             Log.w(TAG, "speech translate failed: ${e.message}")
+            reportTrouble(e.message ?: "")
             ""
         }
+    }
+
+    /** Heard, but nothing could translate it: say why once (again only after it worked in between). */
+    private fun reportTrouble(detail: String) {
+        val kind = Trouble.kind(useGoogle, GoogleTranslate.state())
+        if (kind == toldTrouble) return
+        toldTrouble = kind
+        onStatus("⚠ " + Trouble.text(context, kind, detail))
     }
 
     /** The offline translator from [spoken] to the target, if ML Kit knows that language. */

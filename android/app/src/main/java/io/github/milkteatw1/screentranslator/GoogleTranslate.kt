@@ -20,6 +20,13 @@ object GoogleTranslate {
     /** The network is fine but Google does not want to answer: "too many requests", or its "unusual traffic" page. */
     fun isRefusal(code: Int) = code in REFUSED
 
+    /** Whether Google is being asked right now: "ok", "refused" (it said no; waiting) or "unreachable" (waiting). */
+    fun state(): String = when {
+        SystemClock.uptimeMillis() >= retryAt -> "ok"
+        refusals > 0 -> "refused"
+        else -> "unreachable"
+    }
+
     fun waitAfterFailure(inARow: Int) = minOf(RETRY_AFTER_MS, 5_000L * inARow)
 
     fun waitAfterRefusal(inARow: Int) = minOf(RATE_LIMITED_MS, 60_000L shl (inARow - 1).coerceIn(0, 10))
