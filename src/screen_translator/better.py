@@ -7,12 +7,13 @@ import re
 from pathlib import Path
 
 from . import packs
+from .plat import data_dir
 
 NAME = "Qwen2.5-1.5B-Instruct"
 BASE_URL = "https://huggingface.co/jncraton/Qwen2.5-1.5B-Instruct-ct2-int8/resolve/main/"
 FILES = ("config.json", "tokenizer.json", "tokenizer_config.json", "vocabulary.json", "generation_config.json", "model.bin")
 SIZE_MB = 1550
-MODEL_DIR = Path(os.environ.get("APPDATA", Path.home())) / "ScreenTranslator" / "better" / "qwen2.5-1.5b"
+MODEL_DIR = data_dir() / "better" / "qwen2.5-1.5b"
 
 LANGUAGE_NAMES = {
     "en": "English", "zt": "Traditional Chinese (Taiwan)", "zh": "Simplified Chinese", "ja": "Japanese", "ko": "Korean",

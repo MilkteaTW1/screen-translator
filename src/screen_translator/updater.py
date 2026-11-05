@@ -5,10 +5,10 @@ import re
 import tempfile
 import urllib.request
 
-from . import __version__
+from . import __version__, plat
 
 API_URL = "https://api.github.com/repos/MilkteaTW1/screen-translator/releases/latest"
-INSTALLER_RE = re.compile(r"^ScreenTranslator-Setup-.*\.exe$")
+INSTALLER_RE = plat.INSTALLER_RE
 
 
 def _version_tuple(text):

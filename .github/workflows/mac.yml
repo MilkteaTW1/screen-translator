@@ -1,0 +1,42 @@
+name: macOS
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+jobs:
+  mac:
+    timeout-minutes: 40
+    runs-on: macos-14
+    env:
+      QT_QPA_PLATFORM: offscreen
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt -r requirements-dev.txt
+      - name: Unit tests
+        run: python -m pytest -v -x
+      - name: Apple Vision reads rendered text
+        run: python scripts/launch.py --selftest-ocr | tee ocr.txt && grep -qi "screen test" ocr.txt
+        env:
+          PYTHONPATH: src
+      - name: Build the app and disk image
+        run: ./build_mac.sh
+      - name: The built app reads text too (Vision inside the bundle)
+        run: |
+          dist-mac/ScreenTranslator.app/Contents/MacOS/ScreenTranslator --selftest-ocr | tee frozen.txt
+          grep -qi "screen test" frozen.txt
+      - name: The built app starts and keeps running
+        run: |
+          dist-mac/ScreenTranslator.app/Contents/MacOS/ScreenTranslator --minimized > app.log 2>&1 &
+          PID=$!
+          sleep 20
+          kill -0 $PID || { cat app.log; exit 1; }
+          kill $PID
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ScreenTranslator-mac
+          path: dist-mac/*.dmg

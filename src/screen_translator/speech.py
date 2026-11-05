@@ -15,12 +15,14 @@ import numpy as np
 from PySide6.QtCore import QObject, Signal
 
 from .i18n import t
+from .plat import IS_MAC, data_dir
 from .packs import tidy_chinese
 from .translator import Translator, server_from_settings
 
 SAMPLE_RATE = 16000
 CHUNK = 1600  # 0.1 s of audio per read
-MODEL_DIR = Path(os.environ.get("APPDATA", Path.home())) / "ScreenTranslator" / "whisper"
+LOOPBACK_RE = re.compile(r"blackhole|loopback|soundflower|multi-output|aggregate", re.I)  # macOS virtual audio devices
+MODEL_DIR = data_dir() / "whisper"
 HF_CACHE = Path.home() / ".cache" / "huggingface" / "hub"
 # Multilingual Whisper models (Systran/faster-whisper-<name>) and their download size in MB.
 MODELS = {"tiny": 75, "base": 145, "small": 485}
@@ -243,6 +245,10 @@ class SpeechWorker(QObject):
             s = self.settings
             if s["speech_source"] == "mic":
                 device = sc.default_microphone()
+            elif IS_MAC:  # macOS cannot record what it plays by itself: a virtual device (BlackHole) is needed
+                device = next((m for m in sc.all_microphones() if LOOPBACK_RE.search(m.name)), None)
+                if device is None:
+                    raise RuntimeError(t("speech_need_blackhole"))
             else:  # what the computer plays: the loopback of the default speakers
                 device = sc.get_microphone(sc.default_speaker().name, include_loopback=True)
             self.status.emit(t("speech_listening"))

@@ -1,6 +1,5 @@
 """Transparent, click-through overlay. Each translation goes in empty space next to its text block
 (above, centred, if there is room; else below) and is laid over the text when there is no room."""
-import ctypes
 import time
 
 import numpy as np
@@ -9,7 +8,8 @@ from PySide6.QtCore import QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QFont, QFontMetricsF, QPainter
 from PySide6.QtWidgets import QWidget
 
-WDA_EXCLUDEFROMCAPTURE = 0x11
+from .plat import UI_FONT, hide_from_capture, show_on_all_spaces
+
 
 
 class Overlay(QWidget):
@@ -48,8 +48,8 @@ class Overlay(QWidget):
     def set_capture_hidden(self, hidden):
         """Hidden: screenshots (and our own OCR) never see the translations. Shown: users can
         screenshot them, and the worker skips text that matches its own output."""
-        ctypes.windll.user32.SetWindowDisplayAffinity(
-            int(self.winId()), WDA_EXCLUDEFROMCAPTURE if hidden else 0)
+        hide_from_capture(self, hidden)
+        show_on_all_spaces(self)
 
     def set_background(self, luma, origin=(0, 0), colors=None):
         """The latest screenshot as a coarse brightness map (and the same in colour); lets us tell empty space
@@ -184,7 +184,7 @@ class Overlay(QWidget):
     def _box(self, text, src, line_height, mode="above"):
         """The translation box. Its place is decided once, when the text is first shown, and then kept."""
         size = max(14, min(28, int(line_height * 0.85)))
-        font = QFont("Microsoft JhengHei UI")
+        font = QFont(UI_FONT)
         if mode == "cover":
             # Hide the whole source block and stay inside its width (a translation that sticks out over the
             # page's margins and neighbours looks broken): make the letters a little smaller until the text fits
@@ -233,7 +233,7 @@ class CoverChip(QWidget):
         p.setBrush(QColor(30, 90, 200, 120 if self.overlay.hide_covers else 220))
         p.drawEllipse(self.rect().adjusted(2, 2, -2, -2))
         p.setPen(Qt.white)
-        f = QFont("Microsoft JhengHei UI")
+        f = QFont(UI_FONT)
         f.setPixelSize(18)
         p.setFont(f)
         p.drawText(self.rect(), Qt.AlignCenter, "譯")
@@ -299,7 +299,7 @@ class CaptionOverlay(QWidget):
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
         p.setRenderHint(QPainter.TextAntialiasing)
-        said_font, tr_font = QFont("Microsoft JhengHei UI"), QFont("Microsoft JhengHei UI")
+        said_font, tr_font = QFont(UI_FONT), QFont(UI_FONT)
         said_font.setPixelSize(20)
         tr_font.setPixelSize(30)
         inner = self.width_px - 24
@@ -328,5 +328,5 @@ class CaptionOverlay(QWidget):
             y = top - 6
 
     def set_capture_hidden(self, hidden):
-        ctypes.windll.user32.SetWindowDisplayAffinity(
-            int(self.winId()), WDA_EXCLUDEFROMCAPTURE if hidden else 0)
+        hide_from_capture(self, hidden)
+        show_on_all_spaces(self)

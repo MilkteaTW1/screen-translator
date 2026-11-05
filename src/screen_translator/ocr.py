@@ -1,15 +1,20 @@
-"""Windows built-in OCR (offline, free). Languages = the OCR packs installed in Windows."""
+"""Built-in OCR (offline, free): Windows OCR (languages = the OCR packs installed in Windows) or Apple Vision on macOS."""
 import asyncio
 import re
+import sys
 from dataclasses import dataclass
 
 import numpy as np
 from PySide6.QtCore import Qt  # Qt before winrt, or the process crashes
 from PySide6.QtGui import QImage
-from winrt.windows.globalization import Language
-from winrt.windows.graphics.imaging import BitmapPixelFormat, SoftwareBitmap
-from winrt.windows.media.ocr import OcrEngine
-from winrt.windows.storage.streams import DataWriter
+
+if sys.platform == "win32":
+    from winrt.windows.globalization import Language
+    from winrt.windows.graphics.imaging import BitmapPixelFormat, SoftwareBitmap
+    from winrt.windows.media.ocr import OcrEngine
+    from winrt.windows.storage.streams import DataWriter
+else:
+    from . import ocr_mac
 
 NO_SPACE_LANGS = {"ja", "zh", "th"}
 LONE_WORDS = set("aAI&0123456789")  # one-character tokens that are real words or numbers
@@ -76,7 +81,9 @@ def prepare(bgra, w, h):
 
 
 def available_languages():
-    """[(tag, display_name)] of OCR languages installed in Windows."""
+    """[(tag, display_name)] of the OCR languages: the packs installed in Windows, or what Apple Vision reads."""
+    if sys.platform != "win32":
+        return ocr_mac.languages()
     return [(l.language_tag, l.display_name) for l in OcrEngine.available_recognizer_languages]
 
 
@@ -100,9 +107,10 @@ def fix_confusions(text, tag):
 class Recognizer:
     def __init__(self, tag):
         self.tag = tag
-        self.engine = OcrEngine.try_create_from_language(Language(tag))
-        if self.engine is None:
-            raise RuntimeError(f"OCR language not available: {tag}")
+        if sys.platform == "win32":
+            self.engine = OcrEngine.try_create_from_language(Language(tag))
+            if self.engine is None:
+                raise RuntimeError(f"OCR language not available: {tag}")
         self.joiner = "" if tag.split("-")[0].lower() in NO_SPACE_LANGS else " "
 
     async def _run(self, bgra, w, h):
@@ -116,7 +124,19 @@ class Recognizer:
     def recognize(self, bgra, w, h):
         return self.read_prepared(*prepare(bytes(bgra), w, h))
 
+    def _read_mac(self, data, w, h, scale):
+        lines = []
+        for text, x, y, bw, bh in ocr_mac.read(data, w, h, self.tag):
+            text = text.strip()
+            if self.joiner:
+                text = fix_confusions(text, self.tag)
+            if text:
+                lines.append(Line(x / scale, y / scale, bw / scale, bh / scale, text, 0, self.tag, self.joiner))
+        return lines
+
     def read_prepared(self, data, w, h, scale):
+        if sys.platform != "win32":
+            return self._read_mac(data, w, h, scale)
         result = asyncio.run(self._run(data, w, h))
         lines = []
         for line in result.lines:
@@ -188,7 +208,10 @@ def make_recognizer(tag):
     """The OCR for a chosen language, or for 'auto' one that reads with all installed languages."""
     if tag == "auto":
         chosen = {}
-        for t, _name in available_languages():  # one engine per language: not both en-US and en-GB
+        tags = [t for t, _n in available_languages()]
+        if sys.platform != "win32":  # Vision knows about 30 languages: reading with all of them would be slow
+            tags = [t for t in ocr_mac.AUTO_PREFERRED if t in tags] or tags[:3]
+        for t in tags:  # one engine per language: not both en-US and en-GB
             base = t.split("-")[0].lower()
             if base not in chosen or t == "en-US":
                 chosen[base] = t
