@@ -2,12 +2,12 @@
 
 **English** | [繁體中文](#screen-translator-螢幕翻譯)
 
-**[⬇ Download for Windows or Android | 下載 Windows / Android 版](https://github.com/MilkteaTW1/screen-translator/releases/latest)** (free, MIT)
+**[⬇ Download for Windows, Mac or Android | 下載 Windows / Mac / Android 版](https://github.com/MilkteaTW1/screen-translator/releases/latest)** (free, MIT)
 
 ![Screen Translator in action](docs/promo.gif)
 
-A free screen translator for Windows (and Android). It reads the text on your screen with the built-in
-Windows OCR, translates it with Google Translate (or fully offline with
+A free screen translator for Windows, macOS and Android. It reads the text on your screen with the built-in
+OCR (Windows OCR, Apple Vision on the Mac), translates it with Google Translate (or fully offline with
 [Argos Translate](https://github.com/argosopentech/argos-translate) when there is no internet or you turn Google off),
 and draws the translation in a click-through overlay directly **above** each text block, centred on it.
 Your normal use of the computer is not disturbed.
@@ -31,7 +31,8 @@ Your normal use of the computer is not disturbed.
 - Region and game / video mode: translate only a rectangle you drag (subtitles, a game's dialogue box), scanned faster, with boxes over vanished text dropped sooner.
 - Hover mode: a translation shows only while the mouse is over its text.
 - DeepL with your own key (Quality tab) can be used before Google.
-- macOS: the same app using Apple Vision OCR (see Releases when a .dmg is attached; speech from the Mac's own sound needs the free BlackHole driver).
+- macOS: the same app using Apple Vision OCR (`.dmg` in Releases; built by CI and not yet tested on a real Mac by the author, so please report problems; speech from the Mac's own sound needs the free BlackHole driver).
+- Best offline wording (optional 2.5 GB download): Google's TranslateGemma 4B improves the quick offline draft in the background (Windows).
 - Light on resources: runs at below-normal priority, 2 translation threads, no torch/spacy; starts in about a second
   and can start with Windows, minimised to the tray, translating right away.
 - Translates with Google Translate first (the text is sent to Google; can be turned off in the settings) and falls back
@@ -42,9 +43,9 @@ Your normal use of the computer is not disturbed.
 
 ## Requirements
 
-- Windows 10/11
-- Python 3.10 - 3.12
-- Windows OCR language pack for the screen language (Settings > Time & language > Language & region)
+- Windows 10/11, or macOS (Apple Silicon), or Android 8+
+- Python 3.10 - 3.12 (only when running from source)
+- Windows: OCR language pack for the screen language (Settings > Time & language > Language & region)
 
 ## Download
 
@@ -59,6 +60,10 @@ When a translation has to be laid over its text, it is painted in the page's own
 A setting (off by default) hides all translations while the page scrolls and shows them when it stops, which some people find easier on the eyes.
 When text is read but cannot be translated, the app says why once (Google refusing, no internet, offline pack missing, offline engine broken); Settings > General > Test translation shows what works. The X button asks the first time whether to keep running in the tray or quit everything, and remembers the answer (changeable in General).
 Google's translations are remembered in `%APPDATA%\ScreenTranslator\translations.jsonl` so the same text is not sent again. That file is plain text and holds what was on your screen; turn the option off in the settings and it is deleted.
+
+## macOS
+
+Download `ScreenTranslator-x.y.z.dmg` from the [Releases](../../releases) page and drag the app to Applications. It is not notarised: the first time, right-click the app and choose *Open*. Allow *Screen Recording* when asked (needed to read the screen). Hotkeys need *Input Monitoring*.
 
 ## Android
 
@@ -137,7 +142,7 @@ MIT
 
 ![Screen Translator 實際操作](docs/promo.gif)
 
-免費的 Windows(與 Android)螢幕翻譯工具。它用 Windows 內建 OCR 讀取螢幕上的文字,
+免費的 Windows、macOS 與 Android 螢幕翻譯工具。它用系統內建 OCR(Windows OCR、Mac 的 Apple Vision)讀取螢幕上的文字,
 用 Google 翻譯翻譯(沒有網路或關掉 Google 時,改用 [Argos Translate](https://github.com/argosopentech/argos-translate) 完全離線翻譯),
 並把譯文顯示在每個文字區塊的**正上方**(水平置中)。
 半透明覆蓋層可點穿,不影響你平常操作電腦。
@@ -154,6 +159,11 @@ MIT
 - 語音翻譯(Windows):聽電腦播放的聲音(或麥克風),用 Whisper 離線轉成文字,
   並把「聽到的內容與翻譯」列在螢幕下方。語音模型(tiny 75 MB / base 145 MB / small 485 MB)
   由你決定怎麼取得:現在下載、使用你已有的模型資料夾(也會自動找 Hugging Face 快取裡的模型)、或暫不下載。
+- 快捷鍵(任何程式中都能用):Ctrl+Alt+T 開始/停止、Ctrl+Alt+H 隱藏/顯示譯文、Ctrl+Alt+R 選擇區域。
+- 區域與遊戲/影片模式:只翻譯你框選的矩形(字幕、遊戲對話框),掃描更快,消失的文字更快移除。
+- 懸停模式:滑鼠移到文字上才顯示該處譯文。
+- 可在「品質」分頁使用自己的 DeepL 金鑰,排在 Google 之前。
+- 最佳離線翻譯(選用,下載 2.5 GB):Google TranslateGemma 4B 在背景把離線草稿換成更好的譯文(Windows)。
 - 低資源:以低優先權執行、翻譯只用 2 個執行緒、不含 torch/spacy,約一秒啟動,
   可開機自動啟動並縮小到系統匣、啟動即開始翻譯。
 - 優先使用 Google 翻譯(文字會傳送給 Google,可在設定中關閉),沒有網路時自動退回內建離線模型。
@@ -162,9 +172,9 @@ MIT
 
 ## 系統需求
 
-- Windows 10 / 11
+- Windows 10 / 11,或 macOS(Apple 晶片版),或 Android 8 以上
 - Python 3.10 ~ 3.12(從原始碼執行時)
-- Windows 已安裝螢幕語言的 OCR 語言包(設定 > 時間與語言 > 語言與區域)
+- Windows:已安裝螢幕語言的 OCR 語言包(設定 > 時間與語言 > 語言與區域)
 
 ## 下載
 
@@ -179,6 +189,10 @@ MIT
 有個設定(預設關閉)可在頁面捲動時先隱藏所有翻譯,停下來再顯示,有些人覺得這樣視覺上比較舒服。
 有辨識到文字卻無法翻譯時,程式只會說明一次原因(Google 拒絕、沒網路、缺離線語言包、離線引擎出錯);「設定 > 一般 > 測試翻譯」可看哪些可用。按 X 時,第一次會問要縮到系統匣繼續執行還是全部關閉,並記住答案(可在「一般」更改)。
 Google 的翻譯會記在 `%APPDATA%\ScreenTranslator\translations.jsonl`,相同文字不會重新送出。這個檔案是明文,內容就是你螢幕上出現過的文字;在設定中關閉這個選項就會刪除。
+
+## macOS
+
+到 [Releases](../../releases) 下載 `ScreenTranslator-x.y.z.dmg`,把 App 拖到「應用程式」。未經公證:第一次請按右鍵選「打開」。需要允許「螢幕錄製」(讀取螢幕用),快捷鍵需要「輸入監控」。作者尚未在真實 Mac 上測試過(由 CI 建置),遇到問題請回報。
 
 ## Android 手機版
 
