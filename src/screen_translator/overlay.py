@@ -33,6 +33,12 @@ class Overlay(QWidget):
         self.luma_origin = (0, 0)
         self.hide_covers = False  # translations laid over text can be switched off with the chip
         self.has_covers = False
+        self.hover = False  # show a translation only while the mouse is over its text (or over the translation)
+        self.suppressed = False  # all translations hidden (hotkey)
+        self._hover_timer = QTimer(self)
+        self._hover_timer.setInterval(40)
+        self._hover_timer.timeout.connect(self._hover_tick)
+        self._last_cursor = None
         self.colors = None
         self.looks = {}  # text -> (background, ink) of its cover
         self.painted = []  # (x0, y0, x1, y1) in physical pixels of every translation box currently drawn
@@ -44,6 +50,29 @@ class Overlay(QWidget):
 
     def painted_rects(self):
         return self.painted
+
+    def set_hover(self, on):
+        self.hover = bool(on)
+        if self.hover:
+            self._hover_timer.start()
+        else:
+            self._hover_timer.stop()
+        self.update()
+
+    def set_suppressed(self, on):
+        self.suppressed = bool(on)
+        self.update()
+
+    def cursor_pos(self):
+        """The mouse position in this widget's logical pixels."""
+        from PySide6.QtGui import QCursor
+        return self.mapFromGlobal(QCursor.pos())
+
+    def _hover_tick(self):
+        pos = self.cursor_pos()
+        if pos != self._last_cursor:  # the click-through overlay gets no mouse events: ask where the mouse is
+            self._last_cursor = pos
+            self.update()
 
     def set_capture_hidden(self, hidden):
         """Hidden: screenshots (and our own OCR) never see the translations. Shown: users can
@@ -140,8 +169,9 @@ class Overlay(QWidget):
         gx, gy = (max(-120.0, min(120.0, v * dt)) for v in self.motion)  # how far the page has moved since these boxes were placed
         srcs = [(QRectF((x + gx) / k, (y + gy) / k, w / k, h / k), text, lh / k) for x, y, w, h, text, lh in self.items]
         placed = []  # translation boxes already placed (logical pixels)
+        cursor = self.cursor_pos() if self.hover else None
         for i, (src, text, lh) in enumerate(srcs):
-            if not text:  # untranslated line: nothing to draw
+            if not text or self.suppressed:  # untranslated line (or all hidden): nothing to draw
                 continue
             mode = self.modes.get(text)
             if mode is None:
@@ -152,6 +182,8 @@ class Overlay(QWidget):
                 placed.append(rect)
             self.drawn[text] = rect
             if mode == "cover" and self.hide_covers:
+                continue
+            if cursor is not None and not (src.adjusted(-6, -6, 6, 6).contains(cursor) or rect.adjusted(-4, -4, 4, 4).contains(cursor)):
                 continue
             painted.append((rect.left() * k, rect.top() * k, rect.right() * k, rect.bottom() * k))
             p.setPen(Qt.NoPen)

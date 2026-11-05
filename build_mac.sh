@@ -21,7 +21,7 @@ pyinstaller --noconfirm --windowed --icon "$OUT/icon.icns" --name ScreenTranslat
   --add-data "$PWD/src/screen_translator/icon.png:screen_translator" \
   --add-data "$PWD/src/screen_translator/tw_words.tsv:screen_translator" \
   --collect-all ctranslate2 --collect-all sentencepiece --collect-all faster_whisper --collect-all soundcard \
-  --collect-all zhconv --collect-all tokenizers \
+  --collect-all pynput --collect-all zhconv --collect-all tokenizers \
   --hidden-import objc --hidden-import Vision --hidden-import Quartz --hidden-import Foundation \
   --exclude-module torch --exclude-module spacy --exclude-module stanza --exclude-module argostranslate --exclude-module av \
   --exclude-module onnxruntime --exclude-module matplotlib --exclude-module tkinter \

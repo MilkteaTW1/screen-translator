@@ -27,6 +27,11 @@ Your normal use of the computer is not disturbed.
   Whisper and lists what was said with its translation in a strip at the bottom of the screen. The speech model
   (tiny 75 MB / base 145 MB / small 485 MB) is downloaded only after you choose: download now, use a model folder
   you already have (it also finds models in the Hugging Face cache), or not now.
+- Shortcuts that work in any program: Ctrl+Alt+T start/stop, Ctrl+Alt+H hide/show translations, Ctrl+Alt+R choose a region.
+- Region and game / video mode: translate only a rectangle you drag (subtitles, a game's dialogue box), scanned faster, with boxes over vanished text dropped sooner.
+- Hover mode: a translation shows only while the mouse is over its text.
+- DeepL with your own key (Quality tab) can be used before Google.
+- macOS: the same app using Apple Vision OCR (see Releases when a .dmg is attached; speech from the Mac's own sound needs the free BlackHole driver).
 - Light on resources: runs at below-normal priority, 2 translation threads, no torch/spacy; starts in about a second
   and can start with Windows, minimised to the tray, translating right away.
 - Translates with Google Translate first (the text is sent to Google; can be turned off in the settings) and falls back

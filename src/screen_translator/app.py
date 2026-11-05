@@ -16,6 +16,7 @@ import mss
 import numpy as np
 from PySide6.QtCore import QObject, Qt, QTimer, Signal
 from PySide6.QtGui import QAction, QIcon
+from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QFileDialog, QComboBox, QDoubleSpinBox, QFormLayout, QGroupBox, QHBoxLayout, QLabel,
     QLineEdit, QMenu, QMessageBox, QPlainTextEdit, QPushButton, QSystemTrayIcon, QTabWidget, QVBoxLayout, QWidget,
@@ -26,6 +27,8 @@ from .overlay import CaptionOverlay, CoverChip, Overlay
 from .speech import MODELS, SpeechWorker, download_model, ensure_streams, find_model, import_model
 from . import __version__, i18n, packs, updater
 from .i18n import t
+from .hotkeys import Hotkeys
+from .region import RegionPicker
 from .plat import IS_MAC, data_dir, hide_from_capture, lower_priority, run_installer, set_autostart
 from .translator import (
     diagnose, server_from_settings,
@@ -39,6 +42,7 @@ DEFAULTS = {
     "auto_proper": True, "keep_katakana": False, "glossary": "",
     "hide_from_capture": True, "skip_names": True, "disk_cache": True, "hide_on_scroll": False, "close_action": "ask",
     "autostart": False, "start_on_launch": False,
+    "region": None, "hover_mode": False, "game_mode": False, "hotkeys": True,
     "speech_enabled": False, "speech_source": "system", "speech_model": "base", "speech_lang": "auto",
     "use_google": True, "offline_engine": "standard",
     "server_kind": "off", "server_url": "", "server_key": "", "server_model": "",
@@ -57,6 +61,8 @@ AROUND_CHANGED = 12  # mean brightness difference around a box that means the pa
 MAX_VELOCITY = 4000.0  # px/s: faster than any real scroll is a measuring slip, not something to draw ahead with
 MAX_LEAD = 120  # most pixels boxes are drawn ahead of the last measured position
 POLL = 0.08  # seconds between cheap looks at the screen (grab + compare is ~30 ms); a scan starts when it changed
+GAME_INTERVAL = 0.3  # game / video mode: look at the (small) region at least this often
+GAME_HIDDEN = 4.0  # ... and a box over text that is gone does not stay longer than this
 CONFIRM_GAP = 0.1  # seconds before the second look that confirms newly seen text
 
 
@@ -198,9 +204,10 @@ class Worker(QObject):
                 s = self.settings
                 try:
                     region = s.get("region")  # [left, top, width, height]: translate only this part of the screen
-                    self.origin = (region[0], region[1]) if region else (0, 0)
                     shot = sct.grab(dict(left=region[0], top=region[1], width=region[2], height=region[3])
                                     if region else mon)
+                    k = shot.width / region[2] if region and IS_MAC else 1.0  # macOS: the region is in points, the picture in pixels
+                    self.origin = (region[0] * k, region[1] * k) if region else (0, 0)
                     self._step(shot, time.monotonic())
                 except Exception as e:  # keep the loop alive; show the problem in the UI
                     self.status.emit(t("status_error", err=e))
@@ -306,7 +313,7 @@ class Worker(QObject):
         if self.async_scan:
             self._finish_scan(boxes)
         busy = self.async_scan and self._scan is not None
-        if scan_due(changed, self.dirty, now - self._last_scan, s["interval"]) and not wait and not busy:
+        if scan_due(changed, self.dirty, now - self._last_scan, min(s["interval"], GAME_INTERVAL) if s.get("game_mode") else s["interval"]) and not wait and not busy:
             self._prev, self._prev_keep, self.dirty = small, keep, False
             gray = (arr[::4, ::4, :3].astype(np.int32) * (114, 587, 299)).sum(axis=2) // 1000  # B, G, R
             self.background.emit((gray.astype(np.int16), self.origin, arr[::4, ::4, 2::-1].copy()))  # brightness, and RGB
@@ -527,6 +534,8 @@ class Worker(QObject):
                         hid = t["hid"] = time.monotonic()
                     changed = self._around_changed(t, boxes)
                     limit = HIDDEN_NO_VIEW if changed is None else HIDDEN_MAX
+                    if self.settings.get("game_mode"):
+                        limit = min(limit, GAME_HIDDEN)
                     if not changed and time.monotonic() - hid <= limit:
                         carried.append(t)
                     continue
@@ -671,6 +680,7 @@ class Panel(QWidget):
     language_changed = Signal()
     hidden_to_tray = Signal()
     diagnosed = Signal(str)
+    applied = Signal(dict)
 
     def __init__(self, worker, overlay, langs, speech=None, captions=None):
         super().__init__()
@@ -707,6 +717,17 @@ class Panel(QWidget):
         self.skip_names = self._check("skip_names", s["skip_names"])
         self.disk_cache = self._check("disk_cache", s["disk_cache"])
         self.hide_on_scroll = self._check("hide_on_scroll", s["hide_on_scroll"])
+        self.hover_mode = self._check("hover_mode", s["hover_mode"])
+        self.game_mode = self._check("game_mode", s["game_mode"])
+        self.hotkeys = self._check("hotkeys", s["hotkeys"])
+        self.region = s.get("region")
+        self.region_label = QLabel()
+        self.region_button = QPushButton()
+        self.region_button.clicked.connect(self.pick_region)
+        self.region_clear = QPushButton()
+        self.region_clear.clicked.connect(lambda: self.set_region(None))
+        self.picker = RegionPicker(QGuiApplication.primaryScreen())
+        self.picker.picked.connect(self.set_region)
         self.close_action = QComboBox()
         for action in ("ask", "tray", "quit"):
             self.close_action.addItem("", action)
@@ -722,7 +743,7 @@ class Panel(QWidget):
             self.offline_engine.addItem("", engine)
         self._select(self.offline_engine, s["offline_engine"])
         self.server_kind = QComboBox()
-        for kind in ("off", "gemini", "libretranslate", "openai"):
+        for kind in ("off", "gemini", "deepl", "libretranslate", "openai"):
             self.server_kind.addItem("", kind)
         self._select(self.server_kind, s["server_kind"])
         self.server_url = QLineEdit(s["server_url"])
@@ -778,6 +799,15 @@ class Panel(QWidget):
         lay.addWidget(self.skip_names)
         lay.addWidget(self.disk_cache)
         lay.addWidget(self.hide_on_scroll)
+        lay.addWidget(self.hover_mode)
+        lay.addWidget(self.game_mode)
+        lay.addWidget(self.hotkeys)
+        lay.addWidget(self.region_label)
+        region_row = QHBoxLayout()
+        region_row.addWidget(self.region_button)
+        region_row.addWidget(self.region_clear)
+        region_row.addStretch(1)
+        lay.addLayout(region_row)
         lay.addStretch(1)
         self._tab(translate, "tab_translate")
 
@@ -872,6 +902,10 @@ class Panel(QWidget):
         self.skip_names.toggled.connect(self.apply)
         self.disk_cache.toggled.connect(self.apply)
         self.hide_on_scroll.toggled.connect(self.apply)
+        self.hover_mode.toggled.connect(self.apply)
+        self.game_mode.toggled.connect(self.apply)
+        self.game_mode.toggled.connect(self._game_mode_needs_region)
+        self.hotkeys.toggled.connect(self.apply)
         self.close_action.currentIndexChanged.connect(self.apply)
         self.diagnosed.connect(self._show_diagnosis)
         self.auto.toggled.connect(self.apply)
@@ -940,7 +974,7 @@ class Panel(QWidget):
             self.close_action.setItemText(i, t(key))
         for i, key in enumerate(("offline_standard", "offline_better")):
             self.offline_engine.setItemText(i, t(key, mb=better.SIZE_MB))
-        for i, key in enumerate(("server_off", "server_gemini", "server_libre", "server_openai")):
+        for i, key in enumerate(("server_off", "server_gemini", "server_deepl", "server_libre", "server_openai")):
             self.server_kind.setItemText(i, t(key))
         self.speech_source.setItemText(0, t("audio_system"))
         self.speech_source.setItemText(1, t("audio_mic"))
@@ -955,6 +989,9 @@ class Panel(QWidget):
 
     def _show_toggles(self, *_):
         self.toggle.setText(t("screen_stop" if self.worker.running else "screen_start"))
+        self.region_button.setText(t("region_pick"))
+        self.region_clear.setText(t("region_clear"))
+        self._show_region()
         self.speech_toggle.setText(t("speech_stop" if self.speech_enabled.isChecked() else "speech_start"))
 
     def _fill_language_menu(self):
@@ -989,6 +1026,8 @@ class Panel(QWidget):
             "skip_names": self.skip_names.isChecked(),
             "disk_cache": self.disk_cache.isChecked(),
             "hide_on_scroll": self.hide_on_scroll.isChecked(),
+            "hover_mode": self.hover_mode.isChecked(), "game_mode": self.game_mode.isChecked(),
+            "hotkeys": self.hotkeys.isChecked(), "region": self.region,
             "close_action": self.close_action.currentData(),
             "use_google": self.google.isChecked(), "offline_engine": self.offline_engine.currentData(),
             "server_kind": self.server_kind.currentData(), "server_url": self.server_url.text(),
@@ -1003,6 +1042,7 @@ class Panel(QWidget):
         s = self.current()
         SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
         self.overlay.set_capture_hidden(s["hide_from_capture"])
+        self.overlay.set_hover(s["hover_mode"])
         SETTINGS_PATH.write_text(json.dumps(s, ensure_ascii=False, indent=2), encoding="utf-8")
         self.worker.configure(s)
         if self.speech is not None:
@@ -1012,6 +1052,26 @@ class Panel(QWidget):
             set_autostart(s["autostart"])
         except OSError:
             pass
+        self.applied.emit(s)
+
+    def pick_region(self, *_):
+        self.picker.screen_ = QGuiApplication.primaryScreen()
+        self.picker.setGeometry(self.picker.screen_.geometry())
+        self.picker.begin()
+
+    def set_region(self, region):
+        self.region = region
+        self._show_region()
+        self.apply()
+
+    def _show_region(self):
+        r = self.region
+        self.region_label.setText(t("region_on", l=r[0], t=r[1], w=r[2], h=r[3]) if r else t("region_off"))
+        self.region_clear.setEnabled(bool(r))
+
+    def _game_mode_needs_region(self, on):
+        if on and not self.region:  # game / video mode watches one box: ask for it right away
+            self.pick_region()
 
     def ensure_packs(self, *_, src=None):
         """Offer to download the offline language packs the chosen pair needs."""
@@ -1303,6 +1363,14 @@ def main():
     threading.Thread(target=prewarm, args=(worker,), daemon=True).start()
     panel.check_for_updates()
 
+    keys = Hotkeys()
+    keys.toggle.connect(panel.on_toggle)
+    keys.hide.connect(lambda: overlay.set_suppressed(not overlay.suppressed))
+    keys.region.connect(panel.pick_region)
+    panel.applied.connect(lambda s: keys.configure(s["hotkeys"]))
+    keys.configure(worker.settings["hotkeys"])
+    app._hotkeys = keys  # kept alive
+
     tray = QSystemTrayIcon(app_icon, app)
     menu = QMenu()
     show = QAction(menu, triggered=panel.show)
@@ -1334,6 +1402,8 @@ def main():
             told.append(1)
             tray.showMessage(t("tray_still_running_title"), t("tray_still_running"), QSystemTrayIcon.Information, 6000)
     panel.hidden_to_tray.connect(tell_once)
+    keys.failed.connect(lambda why: tray.showMessage(t("problem_title"), t("hotkeys_failed", err=why), QSystemTrayIcon.Warning, 10000))
+    app.aboutToQuit.connect(lambda: keys.configure(False))
     worker.problem.connect(lambda text: tray.showMessage(t("problem_title"), text, QSystemTrayIcon.Warning, 10000))
     app.aboutToQuit.connect(panel.shutdown)
     tray.show()
