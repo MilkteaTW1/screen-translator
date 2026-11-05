@@ -2,7 +2,7 @@
 # Builds ScreenTranslator.app and a .dmg on macOS (run inside the project venv). Usage: ./build_mac.sh [version]
 set -euo pipefail
 cd "$(dirname "$0")"
-VERSION="${1:-$(sed -n 's/^__version__ = "\(.*\)"//p' src/screen_translator/__init__.py)}"
+VERSION="${1:-$(grep '^__version__' src/screen_translator/__init__.py | cut -d'"' -f2)}"
 OUT="${OUT:-$PWD/dist-mac}"
 rm -rf "$OUT" && mkdir -p "$OUT"
 
