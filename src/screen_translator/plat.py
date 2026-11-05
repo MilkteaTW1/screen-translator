@@ -21,6 +21,9 @@ def data_dir():
 
 
 def _ns_window(widget):
+    from PySide6.QtGui import QGuiApplication
+    if QGuiApplication.platformName() != "cocoa":  # offscreen (tests): winId is not a real NSView
+        return None
     import objc
     view = objc.objc_object(c_void_p=int(widget.winId()))
     return view.window()
