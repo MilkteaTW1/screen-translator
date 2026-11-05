@@ -33,6 +33,11 @@ class OverlayView(context: Context) : View(context) {
     /** The page is scrolling at this many px/s (down positive): between two updates the boxes are carried along at that
      *  speed, so they glide with their text instead of jumping once per update. 0: not scrolling. */
     @Volatile var glide = 0f
+
+    /** The chosen part of the screen, drawn as a thin frame so it is clear that only this is translated. */
+    @Volatile var region: android.graphics.Rect? = null
+        set(value) { field = value; postInvalidate() }
+    private val frame = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.argb(150, 60, 140, 255); style = Paint.Style.STROKE; strokeWidth = 3f }
     private var boxesAt = 0L
 
     /** What was just heard and its translation, newest last; [partial] is the sentence still being spoken. */
@@ -82,6 +87,7 @@ class OverlayView(context: Context) : View(context) {
     }
 
     override fun onDraw(canvas: Canvas) {
+        region?.let { canvas.drawRect(it, frame) }
         drawCaptions(canvas)
         val carried = if (glide != 0f) (glide * ((android.os.SystemClock.uptimeMillis() - boxesAt) / 1000f).coerceIn(0f, 0.12f)).coerceIn(-120f, 120f) else 0f
         canvas.save()

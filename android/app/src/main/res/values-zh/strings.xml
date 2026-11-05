@@ -100,4 +100,14 @@
     <string name="speech_model_label">語音模型</string>
     <string name="model_base">Base:較準確(%1$d MB)</string>
     <string name="model_tiny">Tiny:較輕、較快(%1$d MB)</string>
+    <string name="section_deepl">DeepL(您自己的金鑰)</string>
+    <string name="deepl_key_label">DeepL API 金鑰(在 Gemini 之後、Google 之前使用;留空就不使用)</string>
+    <string name="deepl_get_key">取得免費金鑰</string>
+    <string name="deepl_failed">DeepL 沒有翻譯,改用 Google 或離線:%1$s</string>
+    <string name="game_mode">遊戲/影片模式:更常看螢幕(搭配選好的區域使用)</string>
+    <string name="pick_region">區域</string>
+    <string name="pick_region_button">選擇要翻譯的區域…</string>
+    <string name="region_whole">整個螢幕</string>
+    <string name="region_hint">拖曳框住要翻譯的文字</string>
+    <string name="region_start_first">請先開始翻譯,再選擇區域。</string>
 </resources>

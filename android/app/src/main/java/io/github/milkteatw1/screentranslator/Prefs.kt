@@ -31,6 +31,28 @@ class Prefs(context: Context) {
         get() = sp.getString("geminiKey", "") ?: ""
         set(v) = sp.edit().putString("geminiKey", v.trim()).apply()
 
+    /** Only the part of the screen inside this rectangle is translated (null: all of it). */
+    var region: android.graphics.Rect?
+        get() = if (sp.getInt("regionR", -1) > sp.getInt("regionL", 0)) android.graphics.Rect(
+            sp.getInt("regionL", 0), sp.getInt("regionT", 0), sp.getInt("regionR", 0), sp.getInt("regionB", 0)) else null
+        set(v) {
+            sp.edit().putInt("regionL", v?.left ?: 0).putInt("regionT", v?.top ?: 0)
+                .putInt("regionR", v?.right ?: -1).putInt("regionB", v?.bottom ?: 0).apply()
+        }
+
+    /** Game / video mode: look at the screen faster and let go of text that is gone sooner. */
+    var gameMode: Boolean
+        get() = sp.getBoolean("gameMode", false)
+        set(v) = sp.edit().putBoolean("gameMode", v).apply()
+
+    /** The user's own DeepL API key (empty: not used). Asked after Gemini, before Google. */
+    var deeplKey: String
+        get() = sp.getString("deeplKey", "") ?: ""
+        set(v) = sp.edit().putString("deeplKey", v.trim()).apply()
+
+    /** An own-key engine (Gemini or DeepL) is set up. */
+    val hasOwnEngine: Boolean get() = geminiKey.isNotBlank() || deeplKey.isNotBlank()
+
     /** Keep Google's translations on the phone, so the same text is not sent again. */
     var rememberTranslations: Boolean
         get() = sp.getBoolean("rememberTranslations", true)

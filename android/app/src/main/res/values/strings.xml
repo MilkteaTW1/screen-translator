@@ -101,4 +101,14 @@
     <string name="speech_model_label">Speech model</string>
     <string name="model_base">Base: more accurate (%1$d MB)</string>
     <string name="model_tiny">Tiny: lighter and faster (%1$d MB)</string>
+    <string name="section_deepl">DeepL (your own key)</string>
+    <string name="deepl_key_label">DeepL API key (tried after Gemini, before Google; leave empty to not use it)</string>
+    <string name="deepl_get_key">Get a free key</string>
+    <string name="deepl_failed">DeepL did not translate, so Google or offline is used: %1$s</string>
+    <string name="game_mode">Game / video mode: look at the screen faster (use with a chosen region)</string>
+    <string name="pick_region">Region</string>
+    <string name="pick_region_button">Choose the region to translate...</string>
+    <string name="region_whole">Whole screen</string>
+    <string name="region_hint">Drag a rectangle around the text to translate</string>
+    <string name="region_start_first">Start translating first, then choose the region.</string>
 </resources>
