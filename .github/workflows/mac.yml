@@ -24,7 +24,7 @@ jobs:
         env:
           PYTHONPATH: src
       - name: Build the app and disk image
-        run: ./build_mac.sh
+        run: bash build_mac.sh
       - name: The built app reads text too (Vision inside the bundle)
         run: |
           dist-mac/ScreenTranslator.app/Contents/MacOS/ScreenTranslator --selftest-ocr | tee frozen.txt
