@@ -17,6 +17,9 @@ if "--selftest-speech" in sys.argv:  # used to check a frozen build: transcribe 
     print(" ".join(s.text for s in model.transcribe(a, beam_size=1)[0]))
     import soundcard
     print(soundcard.default_speaker().name)
+elif "--selftest-gemma" in sys.argv:  # used to check a frozen build: the llama.cpp library for TranslateGemma loads
+    from screen_translator import gemma
+    print("gemma library:", gemma.available())
 elif "--selftest-ocr" in sys.argv:  # used to check a frozen build: draw a sentence and read it back with the OCR
     from PySide6.QtGui import QColor, QFont, QGuiApplication, QImage, QPainter
     app = QGuiApplication(sys.argv[:1])
