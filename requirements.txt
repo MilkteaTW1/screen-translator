@@ -19,3 +19,4 @@ pyobjc-framework-Cocoa>=10; sys_platform == 'darwin'
 zhconv>=1.4
 tokenizers>=0.15
 pynput>=1.7
+llama-cpp-python>=0.3.16; sys_platform == 'win32'

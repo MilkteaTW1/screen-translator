@@ -11,7 +11,7 @@ import zlib
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from . import better, packs
+from . import better, gemma, packs
 
 # Target languages offered in the UI: display name -> code (zh-TW / zh-CN are mapped to Argos zt / zh).
 LANGUAGES = {
@@ -482,6 +482,8 @@ class Translator:
         self._google_sent = []  # when the recent Google requests were made (monotonic seconds)
         self.google = False  # use Google Translate first, the offline engine is the fallback
         self.better = False  # the offline engine is the optional language model (when it is downloaded), not the standard packs
+        self.gemma = False  # TranslateGemma improves what the standard offline packs drafted (see upgrade_many)
+        self.drafts = {}  # (text, src, dst) -> True: shown from the quick offline draft, waiting for the better model
         self._google_down = 0.0  # Google is not tried again before this moment
         self.disk = None  # a DiskCache, if translations are to be remembered
         self.server = None  # {"kind", "url", "key", "model"}: the user's own server, tried after Google, before offline
@@ -592,6 +594,33 @@ class Translator:
             self._server_down = time.monotonic() + min(60.0, 10.0 * self._server_fails)
         return done
 
+    def upgrade_many(self, texts, src, dst, ocr_tag, glossary, auto, keep_katakana):
+        """The better model's translation of texts that were shown from a quick offline draft: one per text, None
+        where it has nothing better. Remembers the result in place of the draft."""
+        a, b = argos_code(src), argos_code(dst)
+        results = [None] * len(texts)
+        todo = []
+        for i, text in enumerate(texts):
+            protected, originals = protect(text, glossary, ocr_tag.split("-")[0].lower(), auto, keep_katakana)
+            if any(c.isalpha() for c in PLACEHOLDER_RE.sub("", protected)):
+                todo.append((i, text, protected, originals))
+        if todo and gemma.installed() and gemma.supports(a, b):
+            try:
+                outs = gemma.translate_many([t[2] for t in todo], a, b)
+            except Exception as e:
+                self.offline_error = f"{type(e).__name__}: {e}"
+                outs = [None] * len(todo)
+            for (i, text, _p, originals), out in zip(todo, outs):
+                try:
+                    results[i] = self._finish(text, out, originals, dst)
+                except Exception:
+                    continue
+                if results[i]:
+                    self.cache[(text, src, dst)] = results[i]
+        for text in texts:
+            self.drafts.pop((text, src, dst), None)  # tried: it is not asked again
+        return results
+
     def problem(self):
         """(kind, detail) for why text was read but not translated, or None when nothing is wrong. One answer, the
         likeliest, so the user gets one message: 'packs' (no offline pack and Google is off), 'refused' (Google says no),
@@ -691,6 +720,10 @@ class Translator:
             except Exception as e:
                 self.offline_error = f"{type(e).__name__}: {e}"  # shown to the user: otherwise nothing says why
             self.engine = engine
+            if self.gemma and gemma.installed() and gemma.supports(argos_code(src), argos_code(dst)):
+                for item in rest:
+                    if outs.get(item[0]):
+                        self.drafts[(item[1], src, dst)] = True
         self.unserved = any(not outs.get(item[0]) for item in todo)
         for i, text, protected, originals in todo:
             if i not in outs:
