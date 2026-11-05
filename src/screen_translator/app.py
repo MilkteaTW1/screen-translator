@@ -3,13 +3,10 @@
 # loaded after OCR has run, the process crashes. That happens to anyone who downloads a language pack while the app runs.
 import ctranslate2  # noqa: F401
 import sentencepiece  # noqa: F401
-import ctypes
-import winreg
 import dataclasses
 import difflib
 import json
 import os
-import subprocess
 import sys
 import threading
 import time
@@ -29,12 +26,13 @@ from .overlay import CaptionOverlay, CoverChip, Overlay
 from .speech import MODELS, SpeechWorker, download_model, ensure_streams, find_model, import_model
 from . import __version__, i18n, packs, updater
 from .i18n import t
+from .plat import IS_MAC, data_dir, hide_from_capture, lower_priority, run_installer, set_autostart
 from .translator import (
     diagnose, server_from_settings,
     DiskCache, LANGUAGES, Translator, argos_code, install_pack, looks_like_source, missing_pairs, needed_pairs, ocr_tag_to_code,
 )
 
-SETTINGS_PATH = Path(os.environ.get("APPDATA", Path.home())) / "ScreenTranslator" / "settings.json"
+SETTINGS_PATH = data_dir() / "settings.json"
 CACHE_PATH = SETTINGS_PATH.with_name("translations.jsonl")
 DEFAULTS = {
     "source": "en-US", "target": "zh-TW", "interval": 1.0,
@@ -67,31 +65,6 @@ def scan_due(changed, dirty, since_last, interval):
     (that setting only limits how often a constantly changing screen, like a video, is scanned);
     text waiting for its confirming second look gets a short fixed gap."""
     return (changed or dirty) and since_last >= (CONFIRM_GAP if dirty else interval)
-
-
-RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
-
-
-def set_autostart(on):
-    """Start with Windows (current user, no admin rights): a value under the Run registry key."""
-    exe = sys.executable if getattr(sys, "frozen", False) else f'"{sys.executable}" -m screen_translator'
-    cmd = f'"{exe}" --minimized' if getattr(sys, "frozen", False) else f"{exe} --minimized"
-    with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY, 0, winreg.KEY_SET_VALUE) as k:
-        if on:
-            winreg.SetValueEx(k, "ScreenTranslator", 0, winreg.REG_SZ, cmd)
-        else:
-            try:
-                winreg.DeleteValue(k, "ScreenTranslator")
-            except FileNotFoundError:
-                pass
-
-
-def lower_priority():
-    """Run below normal priority so translating never competes with what the user is doing."""
-    try:
-        ctypes.windll.kernel32.SetPriorityClass(ctypes.windll.kernel32.GetCurrentProcess(), 0x4000)
-    except Exception:
-        pass
 
 
 def _iou(a, b):
@@ -1112,9 +1085,8 @@ class Panel(QWidget):
         threading.Thread(target=run, daemon=True).start()
 
     def _run_installer(self, path):
-        """Install silently: the app closes, the installer replaces it and starts the new version."""
-        subprocess.Popen([path, "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/CLOSEAPPLICATIONS"],
-                         creationflags=0x00000008 | 0x00000200, close_fds=True)  # DETACHED_PROCESS | NEW_PROCESS_GROUP
+        """Windows: install silently, the installer replaces and restarts the app. macOS: open the disk image."""
+        run_installer(path)
         self.close()
 
     def _packs_ready(self):
@@ -1202,7 +1174,7 @@ class Panel(QWidget):
 
     def showEvent(self, e):  # keep this window out of the screenshots too, so it never gets translated
         super().showEvent(e)
-        ctypes.windll.user32.SetWindowDisplayAffinity(int(self.winId()), 0x11)
+        hide_from_capture(self)
 
     def run_diagnosis(self):
         """What works and what does not, in one box that can be copied into a bug report."""

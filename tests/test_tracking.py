@@ -1,3 +1,4 @@
+from conftest import arial
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
@@ -8,7 +9,7 @@ def page(offset=0, width=960, height=540):
     """A page of text lines scrolled by `offset` px, with a fixed grey bar at the top (uint8, like a screenshot)."""
     img = Image.new("L", (width, height + 600), 255)
     d = ImageDraw.Draw(img)
-    f = ImageFont.truetype("arial.ttf", 22)
+    f = arial(22)
     for i in range(40):
         d.text((40 + 10 * (i % 3), 20 + 38 * i), f"Line {i}: the quick brown fox jumps over {i * 7} lazy dogs", font=f, fill=0)
     a = np.asarray(img, np.uint8)[offset:offset + height].copy()
@@ -81,7 +82,7 @@ def test_a_carried_box_next_to_its_fresh_twin_is_a_duplicate():
 def test_rows_that_repeat_do_not_fool_the_shift_when_the_scroll_speed_says_which_one():
     img = Image.new("L", (960, 1200), 255)
     d = ImageDraw.Draw(img)
-    f = ImageFont.truetype("arial.ttf", 22)
+    f = arial(22)
     for i in range(30):  # the same row again and again, 38 px apart
         d.text((40, 20 + 38 * i), "Same item, same text, same row", font=f, fill=0)
     full = np.asarray(img, np.uint8)

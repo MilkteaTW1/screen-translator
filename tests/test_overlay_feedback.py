@@ -2,6 +2,7 @@
 That used to make the translations flicker: a box appears, the picture changes, the text under it is read differently,
 the translation goes away, the picture changes again... Here the overlay is composited into the captured picture the
 way the screen would show it."""
+from conftest import arial
 import time
 
 import numpy as np
@@ -25,7 +26,7 @@ PARAGRAPHS = [
 def page(width=1200, height=1900):
     img = Image.new("RGB", (width, height), "white")
     d = ImageDraw.Draw(img)
-    font = ImageFont.truetype("arial.ttf", 22)
+    font = arial(22)
     y = 40
     for text in PARAGRAPHS * 4:  # a full page: no room beside the text, so translations must cover it
         words, line = text.split(), ""

@@ -2,13 +2,14 @@
 (en.json is the reference; see locales/README.md to add yours). Files dropped into
 %APPDATA%\\ScreenTranslator\\locales are found too, without rebuilding anything.
 Missing keys fall back to English, so a half-finished translation still works."""
-import ctypes
 import json
 import os
 from pathlib import Path
 
+from .plat import IS_MAC, data_dir, system_language as _system_language
+
 BUILTIN_DIR = Path(__file__).with_name("locales")
-USER_DIR = Path(os.environ.get("APPDATA", Path.home())) / "ScreenTranslator" / "locales"
+USER_DIR = data_dir() / "locales"
 FALLBACK = "en"
 
 _fallback = {}
@@ -42,13 +43,7 @@ def available():
 
 def system_language():
     """The Windows display language, like 'zh-TW' (empty if it cannot be read)."""
-    try:
-        buf = ctypes.create_unicode_buffer(85)
-        if ctypes.windll.kernel32.GetUserDefaultLocaleName(buf, len(buf)):
-            return buf.value
-    except Exception:
-        pass
-    return ""
+    return _system_language()
 
 
 def pick(wanted, codes):
@@ -77,6 +72,8 @@ def load(code=""):
 
 def t(key, **values):
     """The text for `key` in the current language ({placeholders} filled from `values`)."""
+    if IS_MAC:  # a text may have a macOS wording: "<key>_mac"
+        key = next((k for k in (key + "_mac",) if k in _strings or k in _fallback), key)
     text = _strings.get(key) or _fallback.get(key) or key
     try:
         return text.format(**values) if values else text

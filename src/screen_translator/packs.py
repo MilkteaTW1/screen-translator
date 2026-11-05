@@ -13,8 +13,10 @@ import urllib.request
 import zipfile
 from pathlib import Path
 
+from .plat import data_dir
+
 INDEX_URL = "https://raw.githubusercontent.com/argosopentech/argospm-index/main/index.json"
-PACK_DIR = Path(os.environ.get("APPDATA", Path.home())) / "ScreenTranslator" / "packs"
+PACK_DIR = data_dir() / "packs"
 LEGACY_DIR = Path.home() / ".local" / "share" / "argos-translate" / "packages"
 SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?。！？])\s+|(?<=[。！？])")
 THREADS = max(2, min(4, (os.cpu_count() or 4) // 2 - 1))  # CPU threads one translation may use: few, so the app stays light

@@ -108,6 +108,9 @@ def test_translation_engine_loads_before_the_ocr_modules():
     import os
     import subprocess
     import sys
+    import pytest
+    if sys.platform != "win32":
+        pytest.skip("only the WinRT OCR has this problem")
     code = ("import sys, screen_translator.app\n"
             "names = list(sys.modules)\n"
             "print(names.index('ctranslate2') < min(i for i, n in enumerate(names) if n.startswith('winrt')))")
