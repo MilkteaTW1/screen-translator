@@ -11,7 +11,7 @@ import zlib
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from . import better, packs
+from . import better, gemma, packs
 
 # Target languages offered in the UI: display name -> code (zh-TW / zh-CN are mapped to Argos zt / zh).
 LANGUAGES = {
@@ -305,13 +305,13 @@ def google_translate_group(texts, src, dst):
     return lines if len(lines) == len(texts) else None
 
 
-def _server_json(url, payload, key=None, timeout=30):
+def _server_json(url, payload, key=None, timeout=30, scheme="Bearer"):
     """POST JSON to the user's own translation server and return the decoded answer."""
     if not url.lower().startswith(("http://", "https://")):
         raise OSError("the server address must start with http:// or https://")
     headers = {"Content-Type": "application/json", "User-Agent": "ScreenTranslator"}
     if key:
-        headers["Authorization"] = "Bearer " + key
+        headers["Authorization"] = f"{scheme} {key}"
     req = urllib.request.Request(url, json.dumps(payload).encode("utf-8"), headers)
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
@@ -344,6 +344,10 @@ def server_from_settings(s):
     if kind == "gemini":  # the user's own Gemini key: the address and model are known, the key is theirs
         return {"kind": "openai", "url": GEMINI_URL, "key": key, "model": s.get("server_model", "") or GEMINI_MODEL,
                 "fallbacks": [] if s.get("server_model", "") else GEMINI_MODELS[1:], "first": True} if key.strip() else None
+    if kind == "deepl":  # DeepL with the user's own key (free keys end in ":fx" and use another address)
+        key = key.strip()
+        host = "https://api-free.deepl.com" if key.endswith(":fx") else "https://api.deepl.com"
+        return {"kind": "deepl", "url": host, "key": key, "first": True} if key else None
     return {"kind": kind, "url": url, "key": key, "model": s.get("server_model", "")} if kind != "off" and url else None
 
 
@@ -360,12 +364,25 @@ def _libre_code(code):
     return {"zh-CN": "zh", "zh-TW": "zt"}.get(code, code.split("-")[0])
 
 
+def _deepl_code(code, target):
+    if code in ("zh-TW", "zh-CN"):
+        return ("ZH-HANT" if code == "zh-TW" else "ZH-HANS") if target else "ZH"
+    base = code.split("-")[0].upper()
+    return {"EN": "EN-US", "PT": "PT-BR"}.get(base, base) if target else base
+
+
 def server_translate_group(server, texts, src, dst):
     """Several lines through the user's own server (LibreTranslate, or an OpenAI-compatible one such as Ollama
     or LM Studio). Returns one translation per line, or None if they don't come back 1:1."""
     base = server["url"].rstrip("/")
     lines = [" ".join(t.split()) for t in texts]
-    if server["kind"] == "libretranslate":
+    if server["kind"] == "deepl":
+        body = {"text": lines, "target_lang": _deepl_code(dst, True)}
+        if src != "auto":
+            body["source_lang"] = _deepl_code(src, False)
+        answer = _server_json(base + "/v2/translate", body, server["key"], timeout=20, scheme="DeepL-Auth-Key")
+        out = [x.get("text") for x in answer.get("translations", [])]
+    elif server["kind"] == "libretranslate":
         answer = _server_json(base + "/translate", {
             "q": lines, "source": "auto" if src == "auto" else _libre_code(src), "target": _libre_code(dst),
             "format": "text", "api_key": server.get("key", "")}, timeout=20)
@@ -465,6 +482,8 @@ class Translator:
         self._google_sent = []  # when the recent Google requests were made (monotonic seconds)
         self.google = False  # use Google Translate first, the offline engine is the fallback
         self.better = False  # the offline engine is the optional language model (when it is downloaded), not the standard packs
+        self.gemma = False  # TranslateGemma improves what the standard offline packs drafted (see upgrade_many)
+        self.drafts = {}  # (text, src, dst) -> True: shown from the quick offline draft, waiting for the better model
         self._google_down = 0.0  # Google is not tried again before this moment
         self.disk = None  # a DiskCache, if translations are to be remembered
         self.server = None  # {"kind", "url", "key", "model"}: the user's own server, tried after Google, before offline
@@ -575,6 +594,33 @@ class Translator:
             self._server_down = time.monotonic() + min(60.0, 10.0 * self._server_fails)
         return done
 
+    def upgrade_many(self, texts, src, dst, ocr_tag, glossary, auto, keep_katakana):
+        """The better model's translation of texts that were shown from a quick offline draft: one per text, None
+        where it has nothing better. Remembers the result in place of the draft."""
+        a, b = argos_code(src), argos_code(dst)
+        results = [None] * len(texts)
+        todo = []
+        for i, text in enumerate(texts):
+            protected, originals = protect(text, glossary, ocr_tag.split("-")[0].lower(), auto, keep_katakana)
+            if any(c.isalpha() for c in PLACEHOLDER_RE.sub("", protected)):
+                todo.append((i, text, protected, originals))
+        if todo and gemma.installed() and gemma.supports(a, b):
+            try:
+                outs = gemma.translate_many([t[2] for t in todo], a, b)
+            except Exception as e:
+                self.offline_error = f"{type(e).__name__}: {e}"
+                outs = [None] * len(todo)
+            for (i, text, _p, originals), out in zip(todo, outs):
+                try:
+                    results[i] = self._finish(text, out, originals, dst)
+                except Exception:
+                    continue
+                if results[i]:
+                    self.cache[(text, src, dst)] = results[i]
+        for text in texts:
+            self.drafts.pop((text, src, dst), None)  # tried: it is not asked again
+        return results
+
     def problem(self):
         """(kind, detail) for why text was read but not translated, or None when nothing is wrong. One answer, the
         likeliest, so the user gets one message: 'packs' (no offline pack and Google is off), 'refused' (Google says no),
@@ -674,6 +720,10 @@ class Translator:
             except Exception as e:
                 self.offline_error = f"{type(e).__name__}: {e}"  # shown to the user: otherwise nothing says why
             self.engine = engine
+            if self.gemma and gemma.installed() and gemma.supports(argos_code(src), argos_code(dst)):
+                for item in rest:
+                    if outs.get(item[0]):
+                        self.drafts[(item[1], src, dst)] = True
         self.unserved = any(not outs.get(item[0]) for item in todo)
         for i, text, protected, originals in todo:
             if i not in outs:

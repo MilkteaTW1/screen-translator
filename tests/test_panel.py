@@ -13,6 +13,9 @@ class _Overlay:
     def set_capture_hidden(self, hidden):
         pass
 
+    def set_hover(self, on):
+        pass
+
 
 def test_declining_the_download_starts_nothing(monkeypatch, tmp_path):
     qapp = QApplication.instance() or QApplication([])
