@@ -47,6 +47,7 @@ class CaptureService : Service() {
         @Volatile var speechOn = false  // translating what is heard
         @Volatile var hasProjection = false  // screen capture was granted (needed for screen text and phone audio)
         const val ACTION_STOP = "stop"
+        const val ACTION_PICK_REGION = "pickRegion"  // choose the part of the screen to translate
         const val ACTION_FEATURES = "features"  // switch screen / speech on or off while running
         const val EXTRA_SCREEN = "screen"
         const val EXTRA_SPEECH = "speech"
@@ -63,6 +64,7 @@ class CaptureService : Service() {
         const val CAPTION_LIFETIME_MS = 25_000L  // how long a caption stays up (the same as on Windows) when nothing new is said
         private const val COVER_SETTLE_MS = 400L
         private const val MOVING_SCAN_MS = 350L
+        private const val GAME_SCAN_MS = 250L  // game / video mode: how often at most the screen is looked at
         private const val RETRY_MS = 3000L
         private const val SCROLL_SETTLE_MS = 350L  // the page counts as scrolling this long after the last measured shift
         private const val SCROLL_TICK_MS = 50L  // while it scrolls, look at every new picture to keep the boxes on their text
@@ -175,6 +177,7 @@ class CaptureService : Service() {
             return START_NOT_STICKY
         }
         if (running) {
+            if (intent.action == ACTION_PICK_REGION) handler.post { pickRegion() }
             if (intent.action == ACTION_FEATURES) {
                 val screen = intent.getBooleanExtra(EXTRA_SCREEN, screenOn)
                 val speech = intent.getBooleanExtra(EXTRA_SPEECH, speechOn)
@@ -244,10 +247,14 @@ class CaptureService : Service() {
         val stop = PendingIntent.getService(
             this, 0, Intent(this, CaptureService::class.java).setAction(ACTION_STOP),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+        val pickRegion = PendingIntent.getService(
+            this, 1, Intent(this, CaptureService::class.java).setAction(ACTION_PICK_REGION),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         val notification = Notification.Builder(this, CHANNEL)
             .setSmallIcon(android.R.drawable.ic_menu_search)
             .setContentTitle(getString(R.string.notification_title))
             .setContentText(getString(R.string.notification_text))
+            .addAction(Notification.Action.Builder(null, getString(R.string.pick_region), pickRegion).build())
             .addAction(Notification.Action.Builder(null, getString(R.string.stop), stop).build())
             .setOngoing(true)
             .build()
@@ -284,6 +291,7 @@ class CaptureService : Service() {
         }
 
         val view = OverlayView(this)
+        view.region = prefs.region
         overlay = view
         val lp = WindowManager.LayoutParams(
             WindowManager.LayoutParams.MATCH_PARENT, WindowManager.LayoutParams.MATCH_PARENT,
@@ -310,6 +318,32 @@ class CaptureService : Service() {
     }
 
     /** A small button, shown only while a translation covers text: one tap hides or shows those covers. */
+    private var picker: RegionPicker? = null
+
+    /** A drag-a-rectangle layer over whatever is on the screen: the translated part becomes that rectangle. */
+    private fun pickRegion() {
+        if (picker != null) return
+        val wm = getSystemService(WINDOW_SERVICE) as WindowManager
+        val view = RegionPicker(this, getString(R.string.region_whole), getString(R.string.region_hint)) { rect ->
+            prefs.region = rect
+            overlay?.region = rect
+            picker?.let { wm.removeView(it) }
+            picker = null
+            forceScan = true
+            tracks = emptyList()
+            epoch++
+            publish()
+        }
+        val lp = WindowManager.LayoutParams(
+            WindowManager.LayoutParams.MATCH_PARENT, WindowManager.LayoutParams.MATCH_PARENT,
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+            PixelFormat.TRANSLUCENT)
+        if (Build.VERSION.SDK_INT >= 28) lp.layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
+        picker = view
+        main.post { wm.addView(view, lp) }
+    }
+
     private fun addChip(wm: WindowManager, view: OverlayView) {
         val d = resources.displayMetrics.density
         val button = android.widget.TextView(this).apply {
@@ -411,6 +445,7 @@ class CaptureService : Service() {
     private fun tick() {
         if (!running || !screenOn) return
         var delay = prefs.intervalMs.toLong().coerceAtLeast(100)
+        if (prefs.gameMode) delay = minOf(delay, GAME_SCAN_MS)
         if (!staticScreen) delay = minOf(delay, MOVING_SCAN_MS)  // the screen is changing: keep up with it
         if (SystemClock.uptimeMillis() < scrollUntil) delay = minOf(delay, SCROLL_TICK_MS)
         else if (velocityY != 0f || hiddenForScroll) { velocityY = 0f; overlay?.glide = 0f; hiddenForScroll = false; publish() }  // the scroll ended
@@ -729,13 +764,16 @@ class CaptureService : Service() {
         return tracks.any { it.seen < 2 }
     }
 
+    /** Whether a text block is inside the chosen part of the screen (all of it, when none is chosen). */
+    private fun inRegion(rect: RectF): Boolean = prefs.region?.let { it.contains(rect.centerX().toInt(), rect.centerY().toInt()) } ?: true
+
     private fun applyOcr(result: com.google.mlkit.vision.text.Text, late: Float): Boolean {
         val joiner = if (src.script == Script.LATIN) " " else ""
         val blocks = result.textBlocks.mapNotNull { b ->
             val box = b.boundingBox ?: return@mapNotNull null
             val text = b.lines.joinToString(joiner) { it.text }.trim()
             Block(RectF(box).apply { offset(0f, late) }, text, box.height().toFloat() / maxOf(1, b.lines.size))
-        }.filter { TextRules.looksLikeSource(it.text, src, prefs.skipNames) && !isOwnOutput(it.text) }
+        }.filter { inRegion(it.rect) && TextRules.looksLikeSource(it.text, src, prefs.skipNames) && !isOwnOutput(it.text) }
             .sortedWith(compareBy({ it.rect.top }, { it.rect.left }))
 
         // Follow each block from scan to scan: matches keep their translation and position,
@@ -830,12 +868,12 @@ class CaptureService : Service() {
     /** Translations of several blocks: Google takes them in one request; whatever it can't do goes offline one by one. */
     private fun translateMany(texts: List<String>): List<String?> {
         val todo = texts.filter { cache[it] == null && recall(it) == null }
-        if ((prefs.useGoogle || prefs.geminiKey.isNotBlank()) && todo.isNotEmpty()) {
+        if ((prefs.useGoogle || prefs.hasOwnEngine) && todo.isNotEmpty()) {
             val prepared = todo.map { it to TextRules.protect(it, glossary, src.script == Script.LATIN, src.code) }
                 .filter { (_, p) -> !TextRules.onlyPlaceholders(p.first) }
             val protectedTexts = prepared.map { it.second.first }
             // the user's own Gemini key first, then Google for what Gemini did not do
-            var outs: List<String?> = if (prefs.geminiKey.isNotBlank()) askGemini(protectedTexts) else List(prepared.size) { null }
+            var outs: List<String?> = if (prefs.hasOwnEngine) askOwn(protectedTexts) else List(prepared.size) { null }
             if (prefs.useGoogle && prepared.size > 1 && outs.any { it == null }) {
                 val rest = outs.indices.filter { outs[it] == null }
                 val google = GoogleTranslate.translateMany(rest.map { protectedTexts[it] }, tgt)
@@ -856,7 +894,7 @@ class CaptureService : Service() {
             cache[text] = ""
             return null
         }
-        val gemini = if (prefs.geminiKey.isNotBlank()) askGemini(listOf(protectedText))[0] else null
+        val gemini = if (prefs.hasOwnEngine) askOwn(listOf(protectedText))[0] else null
         val google = gemini ?: if (prefs.useGoogle) GoogleTranslate.translate(protectedText, tgt) else null
         val out = google ?: try {
             Tasks.await(translator!!.translate(protectedText), 20, TimeUnit.SECONDS)
@@ -869,6 +907,29 @@ class CaptureService : Service() {
     }
 
     @Volatile private var toldGemini: String? = null
+
+    /** The user's own engines in turn: Gemini, then DeepL for what Gemini did not do. */
+    private fun askOwn(texts: List<String>): List<String?> {
+        var outs: List<String?> = if (prefs.geminiKey.isNotBlank()) askGemini(texts) else List(texts.size) { null }
+        if (prefs.deeplKey.isNotBlank() && outs.any { it == null }) {
+            val rest = outs.indices.filter { outs[it] == null }
+            val deepl = askDeepl(rest.map { texts[it] })
+            outs = outs.toMutableList().also { m -> rest.forEachIndexed { j, i -> m[i] = deepl[j] } }
+        }
+        return outs
+    }
+
+    @Volatile private var toldDeepl: String? = null
+
+    private fun askDeepl(texts: List<String>): List<String?> {
+        val outs = DeeplTranslate.translateMany(prefs.deeplKey, texts, src, tgt)
+        val error = DeeplTranslate.lastError
+        if (outs.all { it == null } && error != null && error != toldDeepl) {
+            toldDeepl = error
+            main.post { android.widget.Toast.makeText(this, getString(R.string.deepl_failed, error), android.widget.Toast.LENGTH_LONG).show() }
+        } else if (error == null) toldDeepl = null
+        return outs
+    }
 
     /** Gemini with the user's key. When it fails the user is told why, once for each reason: otherwise "offline" is all they see. */
     private fun askGemini(texts: List<String>): List<String?> {

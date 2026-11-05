@@ -183,6 +183,19 @@ class MainActivity : ComponentActivity() {
                 .apply { topMargin = dp(12) }
         })
         pages[2].addView(gemini)
+        val deepl = Ui.card(ctx, getString(R.string.section_deepl))
+        deepl.addView(Ui.label(ctx, getString(R.string.deepl_key_label)))
+        val deeplKey = Ui.field(ctx, prefs.deeplKey).apply {
+            hint = "xxxxxxxx-xxxx-...:fx"
+            inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD
+        }
+        deepl.addView(deeplKey)
+        deepl.addView(Ui.pill(ctx, getString(R.string.deepl_get_key), false).apply {
+            setOnClickListener { startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(DeeplTranslate.KEY_PAGE))) }
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+                .apply { topMargin = dp(12) }
+        })
+        pages[2].addView(deepl)
         val names = Ui.card(ctx, getString(R.string.section_names))
         val skip = Ui.switch(ctx, getString(R.string.skip_names), prefs.skipNames)
         names.addView(skip)
@@ -196,6 +209,20 @@ class MainActivity : ComponentActivity() {
         speed.addView(interval)
         val hideOnScroll = Ui.switch(ctx, getString(R.string.hide_on_scroll), prefs.hideOnScroll)
         speed.addView(hideOnScroll)
+        val gameMode = Ui.switch(ctx, getString(R.string.game_mode), prefs.gameMode)
+        speed.addView(gameMode)
+        speed.addView(Ui.pill(ctx, getString(R.string.pick_region_button), false).apply {
+            setOnClickListener {
+                if (!CaptureService.running) {
+                    android.widget.Toast.makeText(ctx, getString(R.string.region_start_first), android.widget.Toast.LENGTH_LONG).show()
+                } else {
+                    startService(Intent(ctx, CaptureService::class.java).setAction(CaptureService.ACTION_PICK_REGION))
+                    moveTaskToBack(true)  // the rectangle is drawn over the app you want to translate, not over these settings
+                }
+            }
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+                .apply { topMargin = dp(12) }
+        })
         pages[2].addView(speed)
 
         // General: interface language, version and updates.
@@ -249,15 +276,17 @@ class MainActivity : ComponentActivity() {
             prefs.useGoogle = google.isChecked
             prefs.rememberTranslations = remember.isChecked
             prefs.hideOnScroll = hideOnScroll.isChecked
+            prefs.gameMode = gameMode.isChecked
             if (!remember.isChecked) TranslationMemory(TranslationMemory.fileIn(ctx)).clear()  // off means forgotten
             prefs.glossary = glossary.text.toString()
             prefs.geminiKey = geminiKey.text.toString()
+            prefs.deeplKey = deeplKey.text.toString()
             prefs.speechMic = soundSource.selectedItemPosition == 1
             prefs.spokenLanguage = spokenCodes[speechLang.selectedItemPosition]
             prefs.speechModel = WhisperModel.models[modelChoice.selectedItemPosition].name
         }
-        for (s in listOf(google, remember, skip, hideOnScroll)) s.setOnCheckedChangeListener { _, _ -> save() }
-        geminiKey.addTextChangedListener(object : android.text.TextWatcher {
+        for (s in listOf(google, remember, skip, hideOnScroll, gameMode)) s.setOnCheckedChangeListener { _, _ -> save() }
+        for (field in listOf(geminiKey, deeplKey)) field.addTextChangedListener(object : android.text.TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
             override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
             override fun afterTextChanged(s: android.text.Editable?) { save() }

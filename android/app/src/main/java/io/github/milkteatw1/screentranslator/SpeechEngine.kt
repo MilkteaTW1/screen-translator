@@ -227,7 +227,9 @@ class SpeechEngine(
         return try {
             val (protectedText, originals) = TextRules.protect(said, glossary, false)
             val key = Prefs(context).geminiKey
-            val gemini = if (online && key.isNotBlank()) GeminiTranslate.translateMany(key, listOf(protectedText), target)[0] else null
+            val deeplKey = Prefs(context).deeplKey
+            val gemini = (if (online && key.isNotBlank()) GeminiTranslate.translateMany(key, listOf(protectedText), target)[0] else null)
+                ?: if (online && deeplKey.isNotBlank()) DeeplTranslate.translateMany(deeplKey, listOf(protectedText), null, target)[0] else null
             val google = gemini ?: if (useGoogle && online) GoogleTranslate.translate(protectedText, target) else null
             var out = google
                 ?: offline(spoken)?.let { Tasks.await(it.translate(protectedText), 20, TimeUnit.SECONDS) }
