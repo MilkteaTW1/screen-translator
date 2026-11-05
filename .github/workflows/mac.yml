@@ -18,7 +18,7 @@ jobs:
           cache: pip
       - run: pip install -r requirements.txt -r requirements-dev.txt
       - name: Unit tests
-        run: python -m pytest -v -x
+        run: python -m pytest -v --tb=short
       - name: Apple Vision reads rendered text
         run: python scripts/launch.py --selftest-ocr | tee ocr.txt && grep -qi "screen test" ocr.txt
         env:
