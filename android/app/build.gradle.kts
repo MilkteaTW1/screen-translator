@@ -11,8 +11,8 @@ android {
         applicationId = "io.github.milkteatw1.screentranslator"
         minSdk = 26
         targetSdk = 34
-        versionCode = 31
-        versionName = "0.5.30"
+        versionCode = 32
+        versionName = "0.6.0"
         externalNativeBuild { cmake { arguments += listOf("-DANDROID_STL=c++_static") } }
         ndk { abiFilters += listOf("arm64-v8a", "x86_64") }  // one APK that carries both
     }
