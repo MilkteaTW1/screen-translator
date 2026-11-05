@@ -52,6 +52,8 @@ def test_boxes_follow_a_scroll_and_old_text_leaves_no_box():
         run_eval.ocr.make_recognizer("en-US")
     except RuntimeError:
         pytest.skip("no English OCR installed in Windows")
+    if sys.platform == "darwin":
+        pytest.skip("the box baseline was measured with Windows OCR")
     got = run_eval.eval_boxes(ix, True)
     for name, r in got.items():
         base = BASE["boxes_hidden"][name]

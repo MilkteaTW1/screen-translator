@@ -9,6 +9,17 @@ import PySide6.QtWidgets  # noqa: F401,E402
 import pytest  # noqa: E402
 
 
+def arial(size):
+    """A sans-serif font for drawing test pictures, whatever the system calls it."""
+    from PIL import ImageFont
+    for name in ("arial.ttf", "Arial.ttf", "/System/Library/Fonts/Supplemental/Arial.ttf", "DejaVuSans.ttf"):
+        try:
+            return ImageFont.truetype(name, size)
+        except OSError:
+            pass
+    return ImageFont.load_default(size)
+
+
 @pytest.fixture(autouse=True)
 def english_interface():
     """Tests read interface text: start each one in English whatever language Windows is set to."""
