@@ -5,7 +5,7 @@ on:
   pull_request:
 jobs:
   pytest:
-    timeout-minutes: 8
+    timeout-minutes: 15
     runs-on: windows-latest
     env:
       QT_QPA_PLATFORM: offscreen
@@ -15,5 +15,5 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
-      - run: pip install -r requirements.txt -r requirements-dev.txt
+      - run: pip install --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu --only-binary=llama-cpp-python -r requirements.txt -r requirements-dev.txt
       - run: python -m pytest -v
