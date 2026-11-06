@@ -40,6 +40,11 @@ class Prefs(context: Context) {
                 .putInt("regionR", v?.right ?: -1).putInt("regionB", v?.bottom ?: 0).apply()
         }
 
+    /** Every translation replaces its text (laid over it), lined up like the original, instead of sitting beside it. */
+    var coverAll: Boolean
+        get() = sp.getBoolean("coverAll", false)
+        set(v) = sp.edit().putBoolean("coverAll", v).apply()
+
     /** Game / video mode: look at the screen faster and let go of text that is gone sooner. */
     var gameMode: Boolean
         get() = sp.getBoolean("gameMode", false)

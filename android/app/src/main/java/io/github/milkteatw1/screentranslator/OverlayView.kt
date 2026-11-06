@@ -13,7 +13,7 @@ import android.view.View
 /** Full-screen, touch-through layer. Each translation is drawn directly above its text block, centred on it. */
 class OverlayView(context: Context) : View(context) {
     /** [lineHeight] is the height of one source text line, in pixels. */
-    class Box(val src: RectF, val text: String, val lineHeight: Float, val mode: Int = ABOVE)
+    class Box(val src: RectF, val text: String, val lineHeight: Float, val mode: Int = ABOVE, val align: Int = CoverAlign.LEFT)
 
     companion object {
         const val ABOVE = 0
@@ -68,10 +68,16 @@ class OverlayView(context: Context) : View(context) {
             postInvalidate()
         }
 
-    private fun layoutFor(b: Box, maxWidth: Float, textSize: Float): StaticLayout {
+    private fun layoutFor(b: Box, maxWidth: Float, textSize: Float, align: Layout.Alignment = Layout.Alignment.ALIGN_NORMAL): StaticLayout {
         ink.textSize = textSize
         return StaticLayout.Builder.obtain(b.text, 0, b.text.length, ink, (maxWidth - 12).toInt().coerceAtLeast(1))
-            .setAlignment(Layout.Alignment.ALIGN_NORMAL).build()
+            .setAlignment(align).build()
+    }
+
+    private fun alignment(b: Box) = when (b.align) {
+        CoverAlign.CENTER -> Layout.Alignment.ALIGN_CENTER
+        CoverAlign.RIGHT -> Layout.Alignment.ALIGN_OPPOSITE
+        else -> Layout.Alignment.ALIGN_NORMAL
     }
 
     private fun idealSize(b: Box) = (b.lineHeight * 0.85f).coerceIn(14 * density, 26 * density)
@@ -120,13 +126,18 @@ class OverlayView(context: Context) : View(context) {
         // wrap one character per line; the box stays centred on the original.
         val natural = measure(b).first
         val w = maxOf(b.src.width(), minOf(natural, b.src.width() * 1.6f, width - 16f)).coerceAtLeast(40 * density)
-        val left = if (w <= b.src.width() + 1f) b.src.left else (b.src.centerX() - w / 2).coerceIn(0f, maxOf(0f, width - w))
+        val left = when {
+            w <= b.src.width() + 1f -> b.src.left
+            b.align == CoverAlign.LEFT -> b.src.left.coerceIn(0f, maxOf(0f, width - w))
+            b.align == CoverAlign.RIGHT -> (b.src.right - w).coerceIn(0f, maxOf(0f, width - w))
+            else -> (b.src.centerX() - w / 2).coerceIn(0f, maxOf(0f, width - w))
+        }
         var size = idealSize(b)
-        var layout = layoutFor(b, w, size)
+        var layout = layoutFor(b, w, size, alignment(b))
         // Small screens leave little room: shrink the text to fit the original's area...
         while (layout.height + 8 > b.src.height() && size > MIN_COVER_SP * density) {
             size -= density / 2
-            layout = layoutFor(b, w, size)
+            layout = layoutFor(b, w, size, alignment(b))
         }
         // ...and never grow past 1.4x its height, so one translation cannot bury the lines below it.
         val maxHeight = b.src.height() * 1.4f
@@ -134,7 +145,7 @@ class OverlayView(context: Context) : View(context) {
             val lines = ((maxHeight - 8) / (layout.height.toFloat() / layout.lineCount)).toInt().coerceAtLeast(1)
             ink.textSize = size
             layout = StaticLayout.Builder.obtain(b.text, 0, b.text.length, ink, (w - 12).toInt().coerceAtLeast(1))
-                .setAlignment(Layout.Alignment.ALIGN_NORMAL).setMaxLines(lines)
+                .setAlignment(alignment(b)).setMaxLines(lines)
                 .setEllipsize(android.text.TextUtils.TruncateAt.END).build()
         }
         val h = maxOf(b.src.height(), layout.height + 8f)

@@ -82,6 +82,7 @@ class CaptureService : Service() {
         @Volatile var queued = false
         @Volatile var retryAt = 0L  // a translation that failed is tried again after this moment
         @Volatile var mode = -1  // where the translation goes; decided once, so it never hops around
+        @Volatile var align = -1  // how a cover is lined up (CoverAlign), decided once with the mode
         var seen = 1
         var missed = 0
         var moved = false  // it rode along with a scroll since it was last read: it gets no second chance when missed
@@ -677,6 +678,7 @@ class CaptureService : Service() {
 
     /** Empty space next to the text if there is some (above first, then below), otherwise lay the translation over the text. */
     private fun place(t: Track, all: List<Track>): Int {
+        if (prefs.coverAll) return OverlayView.COVER
         val view = overlay ?: return OverlayView.ABOVE
         val (w, h) = view.measure(OverlayView.Box(t.rect, t.translation ?: "", t.lineHeight))
         val left = (t.rect.centerX() - w / 2).coerceIn(0f, maxOf(0f, width - w))
@@ -845,12 +847,22 @@ class CaptureService : Service() {
      *  the screen is changing nothing is ever seen twice, so a translation that is ready is shown at once. */
     private fun isShown(t: Track) = (t.seen >= 2 || !staticScreen) && t.done && t.translation != null
 
+    private var placedCoverAll = false
+
     @Synchronized
     private fun publish() {
         val visible = tracks.filter { isShown(it) && !it.stale }
         // Top to bottom, not in the order the translations happened to finish: the same screen always gets the same layout.
         for (t in visible) if (t.shownAt == 0L) t.shownAt = SystemClock.uptimeMillis()
+        if (prefs.coverAll != placedCoverAll) {  // the setting changed: every translation is placed again
+            placedCoverAll = prefs.coverAll
+            for (t in tracks) { t.mode = -1; t.align = -1 }
+        }
         for (t in visible.filter { it.mode < 0 }.sortedWith(compareBy({ it.rect.top }, { it.rect.left }))) t.mode = place(t, tracks)
+        for (t in visible) if (t.mode == OverlayView.COVER && t.align < 0) {
+            fun edges(o: Track) = CoverAlign.Edges(o.rect.left, o.rect.top, o.rect.right, o.rect.bottom)
+            t.align = CoverAlign.of(edges(t), t.lineHeight, visible.filter { it !== t }.map { edges(it) })
+        }
         val covering = visible.any { it.mode == OverlayView.COVER }
         main.post { chip?.visibility = if (covering) android.view.View.VISIBLE else android.view.View.GONE }
         Log.d(TAG, "publish tracks=${tracks.size} visible=${visible.size} " +
@@ -862,7 +874,7 @@ class CaptureService : Service() {
         val ahead = if (scrolling) (velocityY * (SCROLL_LEAD + ((SystemClock.uptimeMillis() - lastFollowAt) / 1000f).coerceIn(0f, 0.12f))).coerceIn(-MAX_LEAD, MAX_LEAD) else 0f
         overlay?.glide = if (scrolling) velocityY else 0f
         hiddenForScroll = scrolling && prefs.hideOnScroll  // drawn again, once, when the page has stopped
-        overlay?.boxes = if (hiddenForScroll) emptyList() else visible.map { OverlayView.Box(RectF(it.rect).apply { offset(0f, ahead) }, it.translation!!, it.lineHeight, it.mode) }
+        overlay?.boxes = if (hiddenForScroll) emptyList() else visible.map { OverlayView.Box(RectF(it.rect).apply { offset(0f, ahead) }, it.translation!!, it.lineHeight, it.mode, maxOf(it.align, 0)) }
     }
 
     /** Translations of several blocks: Google takes them in one request; whatever it can't do goes offline one by one. */
