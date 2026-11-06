@@ -14,8 +14,8 @@ from pathlib import Path
 
 import mss
 import numpy as np
-from PySide6.QtCore import QObject, Qt, QTimer, Signal
-from PySide6.QtGui import QAction, QIcon
+from PySide6.QtCore import QObject, Qt, QTimer, QUrl, Signal
+from PySide6.QtGui import QAction, QDesktopServices, QIcon
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QFileDialog, QComboBox, QDoubleSpinBox, QFormLayout, QGroupBox, QHBoxLayout, QLabel,
@@ -29,7 +29,7 @@ from . import __version__, i18n, packs, updater
 from .i18n import t
 from .hotkeys import Hotkeys
 from .region import RegionPicker
-from .plat import IS_MAC, data_dir, hide_from_capture, lower_priority, run_installer, set_autostart
+from .plat import IS_MAC, IS_WIN, data_dir, hide_from_capture, lower_priority, run_installer, set_autostart
 from .translator import (
     diagnose, server_from_settings,
     DiskCache, LANGUAGES, Translator, argos_code, install_pack, looks_like_source, missing_pairs, needed_pairs, ocr_tag_to_code,
@@ -845,6 +845,20 @@ class Panel(QWidget):
         translate = QWidget()
         form = QFormLayout()
         self._row(form, "screen_language", self.source)
+        # Only the OCR languages installed in Windows are listed. With one or none, say how to add more.
+        self.ocr_hint = QWidget()
+        hint = QVBoxLayout(self.ocr_hint)
+        hint.setContentsMargins(0, 0, 0, 0)
+        hint_text = QLabel()
+        hint_text.setWordWrap(True)
+        self._text(hint_text.setText, "ocr_hint")
+        hint_button = QPushButton()
+        self._text(hint_button.setText, "ocr_hint_button")
+        hint_button.clicked.connect(lambda: QDesktopServices.openUrl(QUrl("ms-settings:regionlanguage")))
+        hint.addWidget(hint_text)
+        hint.addWidget(hint_button)
+        self.ocr_hint.setVisible(IS_WIN and len(installed) <= 1)
+        form.addRow(self.ocr_hint)
         self._row(form, "translate_to", self.target)
         self._row(form, "refresh_interval", self.interval)
         lay = QVBoxLayout(translate)
