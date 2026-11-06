@@ -56,6 +56,8 @@
   "status_google_unreachable": "Running (cannot reach Google: offline for now)",
   "status_packs_needed": "Offline packs needed: {names} (run scripts/download_packs.py)",
   "status_error": "Error: {err}",
+  "ocr_hint": "Only the languages Windows can read (its OCR language packs) are listed. To read another language, add it in Windows: Settings > Time & language > Language & region > Add a language, and keep \"Optical character recognition\" ticked. Then restart this app.",
+  "ocr_hint_button": "Open Windows language settings",
   "no_ocr": "No OCR language packs installed in Windows",
   "packs_title": "Language packs",
   "packs_text": "Translating this pair offline needs: {names}\nEach pack is a one-time download of about 50-100 MB. How do you want to get it?",

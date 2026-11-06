@@ -56,6 +56,8 @@
   "status_google_unreachable": "執行中(連不上 Google,先用離線翻譯)",
   "status_packs_needed": "需要離線語言包:{names}(請執行 scripts/download_packs.py)",
   "status_error": "錯誤:{err}",
+  "ocr_hint": "這裡只會列出 Windows 讀得懂的語言(已安裝的 OCR 語言包)。要辨識其他語言,請到 Windows 設定 > 時間與語言 > 語言與區域 > 新增語言,並保持勾選「光學字元辨識」,裝好後重新開啟本程式。",
+  "ocr_hint_button": "開啟 Windows 語言設定",
   "no_ocr": "Windows 沒有安裝任何 OCR 語言套件",
   "packs_title": "語言包",
   "packs_text": "離線翻譯這組語言需要:{names}\n每個語言包只需下載一次,約 50–100 MB。要怎麼取得?",

@@ -182,3 +182,16 @@ def test_the_user_is_told_once_per_kind_of_trouble_and_again_after_it_worked_in_
     worker.translator.unserved = True
     worker._report_problem()
     assert len(told) == 2
+
+
+def test_one_ocr_language_shows_how_to_add_more(monkeypatch, tmp_path):
+    qapp = QApplication.instance() or QApplication([])
+    monkeypatch.setattr(appmod, "SETTINGS_PATH", tmp_path / "settings.json")
+    monkeypatch.setattr(appmod, "set_autostart", lambda on: None)
+    monkeypatch.setattr(appmod, "IS_WIN", True)
+    monkeypatch.setattr(appmod.ocr, "available_languages", lambda: [("zh-Hant-TW", "Chinese")])
+    panel = appmod.Panel(appmod.Worker(appmod.LANGUAGES), _Overlay(), appmod.LANGUAGES)
+    assert not panel.ocr_hint.isHidden()
+    monkeypatch.setattr(appmod.ocr, "available_languages", lambda: [("en-US", "English"), ("ja", "Japanese")])
+    panel = appmod.Panel(appmod.Worker(appmod.LANGUAGES), _Overlay(), appmod.LANGUAGES)
+    assert panel.ocr_hint.isHidden()
