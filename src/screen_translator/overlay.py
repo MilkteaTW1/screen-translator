@@ -31,6 +31,8 @@ class Overlay(QWidget):
         self.modes = {}  # text -> 'above' | 'below' | 'cover', decided once so a translation never hops around
         self.luma = None  # coarse brightness map of the screen (one cell per STEP pixels), to find empty space
         self.luma_origin = (0, 0)
+        self.cover_all = False  # every translation replaces its text (no boxes beside it)
+        self.aligns = {}  # text -> 'left' | 'center' | 'right', read from how the source block lines up with its neighbours
         self.hide_covers = False  # translations laid over text can be switched off with the chip
         self.has_covers = False
         self.hover = False  # show a translation only while the mouse is over its text (or over the translation)
@@ -58,6 +60,13 @@ class Overlay(QWidget):
         else:
             self._hover_timer.stop()
         self.update()
+
+    def set_cover_all(self, on):
+        on = bool(on)
+        if on != self.cover_all:
+            self.cover_all = on
+            self.modes.clear()
+            self.update()
 
     def set_suppressed(self, on):
         self.suppressed = bool(on)
@@ -140,6 +149,7 @@ class Overlay(QWidget):
                     self.items = list(items)
                     # where a translation could not go beside its text was decided on another part of the page
                     self.modes = {t: m for t, m in self.modes.items() if m != "cover"}
+                    self.aligns.clear()
                     self.looks.clear()
                     self.update()
                 return
@@ -154,6 +164,7 @@ class Overlay(QWidget):
             texts = {i[4] for i in steady}
             self.modes = {t: m for t, m in self.modes.items() if t in texts}
             self.looks = {t: v for t, v in self.looks.items() if t in texts}
+            self.aligns = {t: v for t, v in self.aligns.items() if t in texts}
             self.update()
 
     def paintEvent(self, _):
@@ -197,7 +208,13 @@ class Overlay(QWidget):
             p.drawRoundedRect(rect, 4, 4)
             p.setFont(font)
             p.setPen(ink)
-            align = Qt.AlignCenter if mode == "cover" else Qt.AlignVCenter | Qt.AlignLeft  # a cover reads as a label
+            if mode == "cover":  # lined up the way the text it replaces was
+                if text not in self.aligns:
+                    self.aligns[text] = self._align(src, lh, [r for j, (r, _t, _l) in enumerate(srcs) if j != i])
+                horizontal = {"left": Qt.AlignLeft, "right": Qt.AlignRight}.get(self.aligns[text], Qt.AlignHCenter)
+                align = Qt.AlignVCenter | horizontal
+            else:
+                align = Qt.AlignVCenter | Qt.AlignLeft
             p.drawText(rect.adjusted(6, 0, -6, 0), align | Qt.TextWordWrap, text)
         self.painted = painted
         covers = any(m == "cover" for m in self.modes.values())
@@ -207,11 +224,33 @@ class Overlay(QWidget):
 
     def _decide(self, text, src, lh, others):
         """Empty space next to the block if there is some (above first, then below), else lay it over the text."""
+        if self.cover_all:
+            return "cover"
         for mode in ("above", "below"):
             rect, _ = self._box(text, src, lh, mode)
             if self.is_blank(rect) and not any(rect.intersects(o) for o in others):
                 return mode
         return "cover"
+
+    @staticmethod
+    def _align(src, lh, others):
+        """How the source block is lined up: its left edges, right edges or centres agree with the blocks just above and
+        below it (left wins a tie, as justified text does). Alone, a block is taken to be left-aligned."""
+        tol = max(4.0, lh * 0.4)
+        left = right = centre = 0
+        for o in others:
+            if abs(o.center().y() - src.center().y()) > src.height() / 2 + o.height() / 2 + lh * 2.5:
+                continue
+            if min(o.right(), src.right()) - max(o.left(), src.left()) < 0.3 * min(o.width(), src.width()):
+                continue
+            left += abs(o.left() - src.left()) <= tol
+            right += abs(o.right() - src.right()) <= tol
+            centre += abs(o.center().x() - src.center().x()) <= tol
+        if centre > left and centre >= right:
+            return "center"
+        if right > left:
+            return "right"
+        return "left"
 
     def _box(self, text, src, line_height, mode="above"):
         """The translation box. Its place is decided once, when the text is first shown, and then kept."""

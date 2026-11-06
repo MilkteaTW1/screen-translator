@@ -211,6 +211,8 @@ class MainActivity : ComponentActivity() {
         speed.addView(hideOnScroll)
         val gameMode = Ui.switch(ctx, getString(R.string.game_mode), prefs.gameMode)
         speed.addView(gameMode)
+        val coverAll = Ui.switch(ctx, getString(R.string.cover_all), prefs.coverAll)
+        speed.addView(coverAll)
         speed.addView(Ui.pill(ctx, getString(R.string.pick_region_button), false).apply {
             setOnClickListener {
                 if (!CaptureService.running) {
@@ -277,6 +279,7 @@ class MainActivity : ComponentActivity() {
             prefs.rememberTranslations = remember.isChecked
             prefs.hideOnScroll = hideOnScroll.isChecked
             prefs.gameMode = gameMode.isChecked
+            prefs.coverAll = coverAll.isChecked
             if (!remember.isChecked) TranslationMemory(TranslationMemory.fileIn(ctx)).clear()  // off means forgotten
             prefs.glossary = glossary.text.toString()
             prefs.geminiKey = geminiKey.text.toString()
@@ -285,7 +288,7 @@ class MainActivity : ComponentActivity() {
             prefs.spokenLanguage = spokenCodes[speechLang.selectedItemPosition]
             prefs.speechModel = WhisperModel.models[modelChoice.selectedItemPosition].name
         }
-        for (s in listOf(google, remember, skip, hideOnScroll, gameMode)) s.setOnCheckedChangeListener { _, _ -> save() }
+        for (s in listOf(google, remember, skip, hideOnScroll, gameMode, coverAll)) s.setOnCheckedChangeListener { _, _ -> save() }
         for (field in listOf(geminiKey, deeplKey)) field.addTextChangedListener(object : android.text.TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
             override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}

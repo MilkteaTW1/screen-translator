@@ -111,4 +111,5 @@
     <string name="region_whole">Whole screen</string>
     <string name="region_hint">Drag a rectangle around the text to translate</string>
     <string name="region_start_first">Start translating first, then choose the region.</string>
+    <string name="cover_all">Replace the original text with its translation (lined up left / centre / right like the original)</string>
 </resources>

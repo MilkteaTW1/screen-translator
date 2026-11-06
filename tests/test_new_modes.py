@@ -137,3 +137,25 @@ def test_deepl_free_keys_use_the_free_address_and_codes_map():
     assert server_from_settings({"server_kind": "deepl", "server_key": " "}) is None
     assert (_deepl_code("en", True), _deepl_code("pt", True), _deepl_code("zh-CN", False), _deepl_code("ja", True)) == (
         "EN-US", "PT-BR", "ZH", "JA")
+
+
+def test_cover_all_lays_every_translation_over_its_text():
+    ov = _overlay()
+    ov.set_cover_all(True)
+    _paint(ov)
+    assert set(ov.modes.values()) == {"cover"}
+    assert ov.drawn["譯一"].top() == 300 and ov.drawn["譯二"].top() == 100
+
+
+def _rect(x, w, y=0):
+    from PySide6.QtCore import QRectF
+    return QRectF(x, y, w, 20)
+
+
+def test_alignment_follows_the_neighbouring_blocks():
+    f = Overlay._align
+    assert f(_rect(100, 300), 20, [_rect(100, 200, 25), _rect(100, 250, -25)]) == "left"
+    assert f(_rect(200, 200), 20, [_rect(150, 300, 25), _rect(250, 100, -25)]) == "center"
+    assert f(_rect(300, 100), 20, [_rect(200, 200, 25), _rect(250, 150, -25)]) == "right"
+    assert f(_rect(300, 100), 20, []) == "left"
+    assert f(_rect(300, 100), 20, [_rect(300, 100, 900)]) == "left"  # too far away to line up with
