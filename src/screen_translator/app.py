@@ -42,7 +42,7 @@ DEFAULTS = {
     "auto_proper": True, "keep_katakana": False, "glossary": "",
     "hide_from_capture": True, "skip_names": True, "disk_cache": True, "hide_on_scroll": False, "close_action": "ask",
     "autostart": False, "start_on_launch": False,
-    "region": None, "hover_mode": False, "game_mode": False, "hotkeys": True,
+    "region": None, "hover_mode": False, "cover_all": False, "game_mode": False, "hotkeys": True,
     "speech_enabled": False, "speech_source": "system", "speech_model": "base", "speech_lang": "auto",
     "use_google": True, "offline_engine": "standard",
     "server_kind": "off", "server_url": "", "server_key": "", "server_model": "",
@@ -772,6 +772,7 @@ class Panel(QWidget):
         self.hide_on_scroll = self._check("hide_on_scroll", s["hide_on_scroll"])
         self.hover_mode = self._check("hover_mode", s["hover_mode"])
         self.game_mode = self._check("game_mode", s["game_mode"])
+        self.cover_all = self._check("cover_all", s["cover_all"])
         self.hotkeys = self._check("hotkeys", s["hotkeys"])
         self.region = s.get("region")
         self.region_label = QLabel()
@@ -854,6 +855,7 @@ class Panel(QWidget):
         lay.addWidget(self.hide_on_scroll)
         lay.addWidget(self.hover_mode)
         lay.addWidget(self.game_mode)
+        lay.addWidget(self.cover_all)
         lay.addWidget(self.hotkeys)
         lay.addWidget(self.region_label)
         region_row = QHBoxLayout()
@@ -957,6 +959,7 @@ class Panel(QWidget):
         self.hide_on_scroll.toggled.connect(self.apply)
         self.hover_mode.toggled.connect(self.apply)
         self.game_mode.toggled.connect(self.apply)
+        self.cover_all.toggled.connect(self.apply)
         self.game_mode.toggled.connect(self._game_mode_needs_region)
         self.hotkeys.toggled.connect(self.apply)
         self.close_action.currentIndexChanged.connect(self.apply)
@@ -1079,7 +1082,7 @@ class Panel(QWidget):
             "skip_names": self.skip_names.isChecked(),
             "disk_cache": self.disk_cache.isChecked(),
             "hide_on_scroll": self.hide_on_scroll.isChecked(),
-            "hover_mode": self.hover_mode.isChecked(), "game_mode": self.game_mode.isChecked(),
+            "hover_mode": self.hover_mode.isChecked(), "game_mode": self.game_mode.isChecked(), "cover_all": self.cover_all.isChecked(),
             "hotkeys": self.hotkeys.isChecked(), "region": self.region,
             "close_action": self.close_action.currentData(),
             "use_google": self.google.isChecked(), "offline_engine": self.offline_engine.currentData(),
@@ -1096,6 +1099,7 @@ class Panel(QWidget):
         SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
         self.overlay.set_capture_hidden(s["hide_from_capture"])
         self.overlay.set_hover(s["hover_mode"])
+        self.overlay.set_cover_all(s["cover_all"])
         SETTINGS_PATH.write_text(json.dumps(s, ensure_ascii=False, indent=2), encoding="utf-8")
         self.worker.configure(s)
         if self.speech is not None:

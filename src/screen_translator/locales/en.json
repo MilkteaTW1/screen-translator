@@ -98,6 +98,7 @@
   "tray_toggle": "Start / Stop screen translation",
   "tray_speech": "Translate speech",
   "hover_mode": "Show a translation only while the mouse is over its text",
+  "cover_all": "Replace the original text with its translation (laid over it, lined up left / centre / right like the original)",
   "game_mode": "Game / video mode: watch only the chosen region, update faster",
   "hotkeys": "Keyboard shortcuts: Ctrl+Alt+T start/stop, Ctrl+Alt+H hide translations, Ctrl+Alt+R choose region",
   "region_pick": "Choose region...",

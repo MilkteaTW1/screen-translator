@@ -98,6 +98,7 @@
   "tray_toggle": "開始 / 停止翻譯畫面",
   "tray_speech": "翻譯語音",
   "hover_mode": "滑鼠移到文字上才顯示翻譯",
+  "cover_all": "譯文直接蓋住原文(依原文靠左、置中或靠右排列)",
   "game_mode": "遊戲/影片模式:只看選定的區域、更新更快",
   "hotkeys": "快捷鍵:Ctrl+Alt+T 開始/停止、Ctrl+Alt+H 隱藏翻譯、Ctrl+Alt+R 選擇區域",
   "region_pick": "選擇區域…",

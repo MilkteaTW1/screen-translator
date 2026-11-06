@@ -16,6 +16,9 @@ class _Overlay:
     def set_hover(self, on):
         pass
 
+    def set_cover_all(self, on):
+        pass
+
 
 def test_declining_the_download_starts_nothing(monkeypatch, tmp_path):
     qapp = QApplication.instance() or QApplication([])
