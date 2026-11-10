@@ -88,6 +88,8 @@ The source is in
 [`android/`](android) (Kotlin; build with Gradle and JDK 17). The APK is signed with the debug key, so it installs by
 sideloading; Traditional Chinese output converts ML Kit's Simplified Chinese with ICU.
 
+**Related free tools:** need Simplified Chinese turned into Traditional with Taiwan wording, or the spacing between Chinese and English tidied in a document? See the [Traditional/Simplified converter](https://inkacuity.com/en/tools/chinese-converter) and the [Chinese and English spacing fixer](https://inkacuity.com/en/tools/text-fixer). They run in your browser.
+
 ## Install and run from source
 
 ```bat
@@ -212,6 +214,8 @@ Android 安裝程式。安裝一定要你按確認,第一次還需要允許 Scre
 
 原始碼在 [`android/`](android)(Kotlin,用 Gradle 與 JDK 17 建置)。
 APK 以 debug 金鑰簽署,可直接側載安裝;繁體中文是把 ML Kit 的簡體輸出用 ICU 轉換而來。
+
+**相關免費工具:** 要把簡體轉成台灣用語的繁體,或整理文件裡中英文之間的空格?可以用[繁簡轉換(台灣用語)](https://inkacuity.com/tools/chinese-converter)和[中英文間距修正](https://inkacuity.com/tools/text-fixer),都在瀏覽器裡執行。
 
 ## 從原始碼執行
 
