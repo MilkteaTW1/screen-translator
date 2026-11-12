@@ -18,6 +18,7 @@ from .i18n import t
 from .plat import IS_MAC, data_dir
 from .packs import tidy_chinese
 from .translator import Translator, server_from_settings
+from . import streaming
 
 SAMPLE_RATE = 16000
 CHUNK = 1600  # 0.1 s of audio per read
@@ -34,6 +35,8 @@ MAX_SEGMENT = 12.0  # seconds: cut here whatever happens so captions keep up
 MIN_SPEECH = 0.4  # seconds: shorter sounds are clicks, not speech
 MAX_BACKLOG = 3  # utterances waiting for transcription; older ones are dropped to stay real-time
 LIVE_TRANSLATE_EVERY = 1.0  # seconds between translations of the sentence being spoken: one request per word got Google to refuse everything
+STREAM_TRANSLATE_EVERY = 0.5  # seconds between translations of the sentence being spoken (streaming recognition)
+FINISH_REUSE_GAP = 0.9  # a live reading that covers all but this much of the sentence is taken as the final one (no second pass)
 PARTIAL_STEP = 0.3  # seconds of new speech between live updates of the sentence being spoken
 
 # Targets with a script of their own: words already in it need no translation, only the stretches in other scripts do.
@@ -215,12 +218,19 @@ class SpeechWorker(QObject):
         self.translator = Translator()
         self.running = False
         self.settings = {}
+        self.gen = 0  # counts starts and stops: threads of an earlier run must not touch the current one
+        self._reset()
+
+    def _reset(self):
         self.audio = queue.Queue()
         self.utterances = queue.Queue()
+        self.finals = queue.Queue()  # (said, language) waiting for translation: in order, beside the transcription
         self.live = None  # (epoch, audio of the sentence so far): only the latest is kept
         self.epoch = 0  # counts finished sentences, so a late live update of a finished one is dropped
         self._live_translated_at = 0.0
+        self._live_job = None  # (epoch, text, language) for the translation thread to draft next: only the latest is kept
         self._live_translation = (-1, "")  # (epoch, translation) shown beside the words until the next one is made
+        self._last_live = (-1, "", "", 0.0)  # (epoch, text, language, seconds of audio it covered)
 
     def configure(self, settings):
         self.settings = settings
@@ -233,13 +243,31 @@ class SpeechWorker(QObject):
         if self.running:
             return
         self.running = True
-        for target in (self._capture, self._segment, self._transcribe):
-            threading.Thread(target=target, daemon=True).start()
+        self.gen += 1  # threads of a run that was stopped meanwhile see the new number and end
+        self._reset()  # nothing heard before the stop may be shown after the start
+        key = self.stream_key()
+        if key:  # words as they are spoken: no Whisper, no waiting for a whole reading
+            targets = (self._capture, lambda gen: self._stream(gen, key), self._translate_loop)
+        else:
+            targets = (self._capture, self._segment, self._transcribe, self._translate_loop)
+        for target in targets:
+            threading.Thread(target=target, args=(self.gen,), daemon=True).start()
+
+    def stream_key(self):
+        """The streaming model to use for the chosen language, or None (Whisper: switched off, no model for it, not downloaded)."""
+        if not self.settings.get("speech_fast", True):
+            return None
+        key = streaming.key_for(self.settings.get("speech_lang", "auto"))
+        return key if key and streaming.find(key) else None
 
     def stop(self):
         self.running = False
+        self.gen += 1
 
-    def _capture(self):
+    def _alive(self, gen):
+        return self.running and gen == self.gen
+
+    def _capture(self, gen):
         try:
             import soundcard as sc
             s = self.settings
@@ -253,15 +281,16 @@ class SpeechWorker(QObject):
                 device = sc.get_microphone(sc.default_speaker().name, include_loopback=True)
             self.status.emit(t("speech_listening"))
             with device.recorder(samplerate=SAMPLE_RATE, channels=1, blocksize=CHUNK) as rec:
-                while self.running:
+                while self._alive(gen):
                     self.audio.put(rec.record(numframes=CHUNK)[:, 0].astype(np.float32))
         except Exception as e:
-            self.running = False
-            self.status.emit(t("speech_audio_error", err=e))
+            if gen == self.gen:
+                self.running = False
+                self.status.emit(t("speech_audio_error", err=e))
 
-    def _segment(self):
+    def _segment(self, gen):
         seg = Segmenter()
-        while self.running:
+        while self._alive(gen):
             try:
                 chunk = self.audio.get(timeout=0.5)
             except queue.Empty:
@@ -272,6 +301,7 @@ class SpeechWorker(QObject):
                 if snap is not None:
                     self.live = (self.epoch, snap)
             else:
+                finished = self.epoch
                 self.epoch += 1
                 self.live = None
                 while self.utterances.qsize() >= MAX_BACKLOG:
@@ -279,9 +309,9 @@ class SpeechWorker(QObject):
                         self.utterances.get_nowait()
                     except queue.Empty:
                         break
-                self.utterances.put(utterance)
+                self.utterances.put((finished, utterance))
 
-    def _transcribe(self):
+    def _transcribe(self, gen):
         try:
             WhisperModel = whisper_model_class()
             path = find_model(self.settings["speech_model"])
@@ -290,23 +320,113 @@ class SpeechWorker(QObject):
             self.status.emit(t("speech_loading"))
             model = WhisperModel(str(path), device="cpu", compute_type="int8", cpu_threads=3)
         except Exception as e:
-            self.running = False
-            self.status.emit(t("speech_model_error", err=e))
+            if gen == self.gen:
+                self.running = False
+                self.status.emit(t("speech_model_error", err=e))
+            return
+        if not self._alive(gen):
             return
         self.status.emit(t("speech_listening"))
-        while self.running:
+        while self._alive(gen):
             try:
-                audio = self.utterances.get(timeout=0.1)
+                epoch, audio = self.utterances.get(timeout=0.1)
             except queue.Empty:
                 try:
-                    self._show_live(model)  # nothing finished: work on the sentence being spoken
+                    self._show_live(model, gen)  # nothing finished: work on the sentence being spoken
                 except Exception as e:  # one bad reading must not end the captions for good
-                    self.status.emit(t("speech_error", err=e))
+                    if self._alive(gen):
+                        self.status.emit(t("speech_error", err=e))
                 continue
             try:
-                self._handle(model, audio)
+                self._handle(model, epoch, audio, gen)
             except Exception as e:
-                self.status.emit(t("speech_error", err=e))
+                if self._alive(gen):
+                    self.status.emit(t("speech_error", err=e))
+
+    def _stream(self, gen, key):
+        """Recognition while the words are spoken: each 0.1 s chunk goes in, the text so far comes out at once. The
+        translation of it is made beside this (see _translate_loop) and joins the words a moment later."""
+        try:
+            stream = streaming.Stream(key)
+        except Exception as e:
+            if gen == self.gen:
+                self.running = False
+                self.status.emit(t("speech_model_error", err=e))
+            return
+        if not self._alive(gen):
+            return
+        self.status.emit(t("speech_listening"))
+        spoken = self.settings.get("speech_lang", "auto")
+        shown = ""
+        traditional = str(self.settings.get("target", "")).lower() in ("zh-tw", "zh-hk", "zh-hant")
+        while self._alive(gen):
+            try:
+                chunk = self.audio.get(timeout=0.2)
+            except queue.Empty:
+                continue
+            try:
+                text, ended = stream.feed(chunk)
+            except Exception as e:
+                if self._alive(gen):
+                    self.status.emit(t("speech_error", err=e))
+                continue
+            if not self._alive(gen):
+                return
+            code = streaming.guess_language(text, spoken)
+            if code == "zh" and traditional and text:
+                from zhconv import convert
+                text = convert(text, "zh-tw")  # the model writes simplified characters
+            if ended:
+                if len(text) >= 2:
+                    self.finals.put((text, code))  # the line replaces the live one when its translation is ready
+                else:
+                    self.partial.emit("", "")
+                shown = ""
+                self._last_live = (-1, "", "", 0.0)
+                self._live_job = None
+                self._live_translation = (-1, "")
+                self.epoch += 1
+            elif text and text != shown:
+                shown = text
+                self._last_live = (self.epoch, text, code, 0.0)
+                now = time.monotonic()
+                if now - self._live_translated_at >= STREAM_TRANSLATE_EVERY:
+                    self._live_translated_at = now
+                    self._live_job = (self.epoch, text, code)
+                translation = self._live_translation[1] if self._live_translation[0] == self.epoch else ""
+                self.partial.emit(text, translation)
+
+    def _translate_loop(self, gen):
+        """Translation runs here, beside the transcription, so a slow network never holds up the next reading. Finished
+        sentences go first and in order; of the sentence being spoken only the newest draft is translated."""
+        while self._alive(gen):
+            try:
+                said, code = self.finals.get(timeout=0.05)
+            except queue.Empty:
+                job, self._live_job = self._live_job, None
+                if job is not None:
+                    try:
+                        self._draft(job, gen)
+                    except Exception:
+                        pass
+                continue
+            try:
+                translation = self._translate(said, code)
+                if self._alive(gen):
+                    self.line.emit(said, translation)
+            except Exception as e:
+                if self._alive(gen):
+                    self.status.emit(t("speech_error", err=e))
+
+    def _draft(self, job, gen):
+        epoch, text, code = job
+        translation = self._translate(text, code)  # online: the translation shows while the sentence is still being said
+        if not self._alive(gen) or epoch != self.epoch:
+            return
+        self._live_translation = (epoch, translation)
+        last = self._last_live
+        if last[0] == epoch:
+            self.partial.emit(last[1], translation)
 
     def _translate(self, text, code, online=True):
         s = self.settings
@@ -337,7 +457,7 @@ class SpeechWorker(QObject):
             self.status.emit(t("speech_no_translation", err=why[:160]))  # heard, but nothing to show: say why
         return translation
 
-    def _show_live(self, model):
+    def _show_live(self, model, gen):
         """Words as they are spoken: transcribe the sentence so far and show it (and its translation) right away.
         When the sentence ends, _handle redoes it with more care and that version replaces this one."""
         live, self.live = self.live, None
@@ -346,32 +466,35 @@ class SpeechWorker(QObject):
         epoch, audio = live
         language = None if self.settings["speech_lang"] == "auto" else self.settings["speech_lang"]
         text, info = transcribe(model, audio, language)
-        if not self.running:
+        if not self._alive(gen):
             return  # stopped while this was being read: it must not put a caption back on the screen
         if not text or epoch != self.epoch:  # the sentence ended while we were working: its final version is coming
             return
-        last = getattr(self, "_last_live", (-1, ""))
+        last = self._last_live
         if last[0] == epoch and len(text) < 0.6 * len(last[1]) and not last[1].startswith(text):
             return  # a reading far shorter than the last one and not a part of it: a stumble, keep what is shown
-        self._last_live = (epoch, text)
+        self._last_live = (epoch, text, info.language, len(audio) / SAMPLE_RATE)
         now = time.monotonic()
         if now - self._live_translated_at >= LIVE_TRANSLATE_EVERY:  # not every new word: that is a request each
             self._live_translated_at = now
-            # a local draft while the sentence is still being said; the finished sentence goes to Google once
-            self._live_translation = (epoch, self._translate(text, info.language, online=False))
+            self._live_job = (epoch, text, info.language)
         translation = self._live_translation[1] if self._live_translation[0] == epoch else ""
-        if self.running:
-            self.partial.emit(text, translation)
+        self.partial.emit(text, translation)
 
-    def _handle(self, model, audio):
+    def _handle(self, model, epoch, audio, gen):
         s = self.settings
+        seconds = len(audio) / SAMPLE_RATE
+        last = self._last_live
+        if last[0] == epoch and last[1] and last[3] >= seconds - FINISH_REUSE_GAP:
+            # the live reading already heard (nearly) all of it with the same model: reading it again would only make
+            # the translation come seconds late
+            self.finals.put((last[1], last[2]))  # the line replaces the live one when it arrives
+            return
         language = None if s["speech_lang"] == "auto" else s["speech_lang"]
-        text, info = transcribe(model, audio, language, beam=2)  # the finished sentence gets the careful pass
-        if not self.running:
+        text, info = transcribe(model, audio, language, beam=1)
+        if not self._alive(gen):
             return
         if not text:
             self.partial.emit("", "")  # nothing real was said: drop the live line
             return
-        translation = self._translate(text, info.language)
-        if self.running:  # translating can take a while: it may have been stopped meanwhile
-            self.line.emit(text, translation)
+        self.finals.put((text, info.language))

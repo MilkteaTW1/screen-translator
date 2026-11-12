@@ -82,34 +82,95 @@ def worker(monkeypatch):
     return w, seen
 
 
+def drain(w):
+    """Runs the translation thread until what is waiting for it has been translated."""
+    import threading, time
+    t = threading.Thread(target=w._translate_loop, args=(w.gen,), daemon=True)
+    t.start()
+    deadline = time.time() + 5
+    while time.time() < deadline and (not w.finals.empty() or w._live_job is not None):
+        time.sleep(0.02)
+    time.sleep(0.2)
+    w.running = False
+    t.join(2)
+    w.running = True
+    from PySide6.QtCore import QCoreApplication
+    from PySide6.QtWidgets import QApplication; QApplication.instance() or QApplication([])
+    QCoreApplication.processEvents()  # signals sent from the thread are delivered by the event loop
+
+
 def test_words_are_shown_as_they_are_spoken_then_the_finished_sentence_replaces_them(monkeypatch):
     w, seen = worker(monkeypatch)
     model = _Model("When you are traveling")
     w.live = (w.epoch, voice(2, 0.1))
-    w._show_live(model)
+    w._show_live(model, w.gen)
     model.text = "When you are traveling to a new country."
-    w._handle(model, voice(3, 0.1))
-    assert seen == [("live", "When you are traveling", "譯:When you are traveling"),
-                    ("final", "When you are traveling to a new country.", "譯:When you are traveling to a new country.")]
-    assert model.beams == [1, 2]  # quick for the live line, careful for the finished sentence
+    ended = w.epoch
+    w.epoch += 1  # the sentence is over
+    w._handle(model, ended, voice(3, 0.1), w.gen)  # it ended long after the live reading: read again
+    drain(w)
+    assert seen[0] == ("live", "When you are traveling", "")  # the words come first, at once
+    assert seen[-1] == ("final", "When you are traveling to a new country.", "譯:When you are traveling to a new country.")
+    assert model.beams == [1, 1]
+
+
+def test_a_finished_sentence_that_the_live_reading_already_heard_is_not_read_again(monkeypatch):
+    w, seen = worker(monkeypatch)
+    model = _Model("When you are traveling")
+    audio = voice(2, 0.1)
+    w.live = (w.epoch, audio)
+    w._show_live(model, w.gen)
+    ended = w.epoch
+    w.epoch += 1
+    w._handle(model, ended, audio, w.gen)
+    drain(w)
+    assert model.beams == [1]  # only the live reading
+    assert seen[-1] == ("final", "When you are traveling", "譯:When you are traveling")
+
+
+def test_the_translation_of_the_sentence_being_spoken_shows_while_it_is_still_said(monkeypatch):
+    w, seen = worker(monkeypatch)
+    w.live = (w.epoch, voice(2, 0.1))
+    w._show_live(_Model("When you are traveling"), w.gen)
+    drain(w)
+    assert ("live", "When you are traveling", "譯:When you are traveling") in seen
 
 
 def test_a_live_update_for_a_sentence_that_already_ended_is_dropped(monkeypatch):
     w, seen = worker(monkeypatch)
     w.live = (w.epoch, voice(2, 0.1))
     w.epoch += 1  # the sentence finished while the live update was being made
-    w._show_live(_Model("old words"))
+    w._show_live(_Model("old words"), w.gen)
     assert seen == []
 
 
 def test_nothing_is_shown_after_speech_was_stopped(monkeypatch):
     w, seen = worker(monkeypatch)
     model = _Model("When you are traveling")
+    gen = w.gen
     w.live = (w.epoch, voice(2, 0.1))
     w.running = False  # stopped while the sentence was being read
-    w._show_live(model)
-    w._handle(model, voice(3, 0.1))
+    w._show_live(model, gen)
+    w._handle(model, w.epoch, voice(3, 0.1), gen)
     assert seen == []
+
+
+def test_what_was_heard_before_a_stop_is_gone_after_the_next_start(monkeypatch):
+    w, seen = worker(monkeypatch)
+    w.audio.put(voice(1, 0.1))
+    w.utterances.put((0, voice(2, 0.1)))
+    w.finals.put(("old", "en"))
+    w.epoch = 5
+    w.stop()
+    old = w.gen
+    monkeypatch.setattr(w, "_capture", lambda gen: None)
+    monkeypatch.setattr(w, "_segment", lambda gen: None)
+    monkeypatch.setattr(w, "_transcribe", lambda gen: None)
+    monkeypatch.setattr(w, "_translate_loop", lambda gen: None)
+    w.start()
+    assert w.gen > old and w.epoch == 0
+    assert w.audio.empty() and w.utterances.empty() and w.finals.empty()
+    assert not w._alive(old)  # threads of the earlier run end
 
 
 def test_the_sentence_being_spoken_is_not_sent_for_translation_with_every_new_word(monkeypatch):
@@ -118,10 +179,10 @@ def test_the_sentence_being_spoken_is_not_sent_for_translation_with_every_new_wo
     monkeypatch.setattr(w.translator, "translate", lambda text, *a: sent.append(text) or "譯:" + text)
     for text in ("When", "When you", "When you are", "When you are traveling"):
         w.live = (w.epoch, voice(2, 0.1))
-        w._show_live(_Model(text))
+        w._show_live(_Model(text), w.gen)
+    drain(w)
     assert len(sent) == 1  # one request, not four
-    assert [s[1] for s in seen] == ["When", "When you", "When you are", "When you are traveling"]  # the words still follow
-    assert all(s[2] == "譯:When" for s in seen)  # beside the translation made a moment ago
+    assert [s[1] for s in seen if s[0] == "live"][:4] == ["When", "When you", "When you are", "When you are traveling"]  # the words still follow
 
 
 def test_a_caption_line_that_nothing_replaces_goes_away_too():
@@ -180,3 +241,48 @@ def test_english_words_inside_chinese_speech_are_translated_alone():
     assert s._translate("我覺得 very good 啊", "zh") == "我覺得很好啊"
     assert seen == ["very good"]
     assert _speech_with("zh-TW", lambda text, *a, **k: "你好嗎")._translate("how are you", "en") == "你好嗎"
+
+
+def test_streaming_models_are_chosen_by_the_spoken_language():
+    from screen_translator import streaming
+    assert streaming.key_for("auto") == "zh-en" and streaming.key_for("zh") == "zh-en"
+    assert streaming.key_for("en") == "en" and streaming.key_for("ko") == "ko" and streaming.key_for("ja") == "multi"
+    assert streaming.key_for("fr") is None  # only Whisper reads it
+
+
+def test_streaming_text_is_written_like_a_sentence_and_the_language_guessed():
+    from screen_translator import streaming
+    assert streaming.tidy("WHEN I ARRIVE IN TOKYO") == "When I arrive in tokyo"
+    assert streaming.tidy("你好 WORLD") == "你好 world"  # the English in it is not shouted
+    assert streaming.guess_language("你好嗎", "auto") == "zh" and streaming.guess_language("hello", "auto") == "en"
+    assert streaming.guess_language("hello", "ja") == "ja"
+
+
+def test_fast_captions_show_words_at_once_and_end_with_a_translated_line(monkeypatch):
+    from screen_translator import streaming
+    w, seen = worker(monkeypatch)
+    w.settings["speech_lang"] = "en"
+
+    class Fake:  # a recogniser: the words grow, then the sentence ends
+        script = iter([("Hello", False), ("Hello there", False), ("Hello there my friend", True)])
+
+        def __init__(self, key):
+            pass
+
+        def feed(self, chunk):
+            return next(Fake.script)
+
+    monkeypatch.setattr(streaming, "Stream", Fake)
+    for _ in range(3):
+        w.audio.put(voice(1, 0.1)[:1600])
+    import threading, time
+    gen = w.gen
+    th = threading.Thread(target=w._stream, args=(gen, "en"), daemon=True)
+    th.start()
+    time.sleep(0.5)
+    drain(w)
+    w.running = False
+    th.join(2)
+    words = [s[1] for s in seen if s[0] == "live"]
+    assert words[:2] == ["Hello", "Hello there"]
+    assert seen[-1] == ("final", "Hello there my friend", "譯:Hello there my friend")
