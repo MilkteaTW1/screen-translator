@@ -2,7 +2,6 @@
 the voice, instead of after a whole sentence has been read (Whisper needs 1 s or more for every reading). The models
 are small transducers that run on the CPU; they are downloaded once, after the user agrees."""
 import re
-from pathlib import Path
 
 from .plat import data_dir
 

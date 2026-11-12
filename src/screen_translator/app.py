@@ -6,7 +6,6 @@ import sentencepiece  # noqa: F401
 import dataclasses
 import difflib
 import json
-import os
 import sys
 import threading
 import time

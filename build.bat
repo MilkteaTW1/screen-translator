@@ -14,4 +14,7 @@ pyinstaller --noconfirm --windowed --icon "%~dp0assets\icon.ico" --name ScreenTr
   --exclude-module PySide6.QtWebEngineCore --exclude-module PySide6.QtWebEngineWidgets ^
   --exclude-module PySide6.QtPdf --exclude-module PySide6.QtQuick --exclude-module PySide6.QtQml ^
   scripts\launch.py
+if errorlevel 1 exit /b 1
+rem Wheels such as sentencepiece 0.2.3 vendor msvcp140-<hash>.dll, which PyInstaller leaves out: put them back.
+python scripts\copy_vendored_dlls.py "%OUT%\ScreenTranslator" || exit /b 1
 rem Setup installer (needs Inno Setup 6):  ISCC /DSourceDir=%OUT%\ScreenTranslator installer\ScreenTranslator.iss

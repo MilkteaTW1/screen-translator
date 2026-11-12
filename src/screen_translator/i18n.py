@@ -3,7 +3,6 @@
 %APPDATA%\\ScreenTranslator\\locales are found too, without rebuilding anything.
 Missing keys fall back to English, so a half-finished translation still works."""
 import json
-import os
 from pathlib import Path
 
 from .plat import IS_MAC, data_dir, system_language as _system_language
@@ -72,9 +71,11 @@ def load(code=""):
 
 def t(key, **values):
     """The text for `key` in the current language ({placeholders} filled from `values`)."""
-    if IS_MAC:  # a text may have a macOS wording: "<key>_mac"
-        key = next((k for k in (key + "_mac",) if k in _strings or k in _fallback), key)
-    text = _strings.get(key) or _fallback.get(key) or key
+    # A text may have a macOS wording, "<key>_mac". The chosen language comes first: its plain wording beats the
+    # English macOS one, so a translation that has no "_mac" keys is still shown in its own language on a Mac.
+    order = ((_strings, key + "_mac"), (_strings, key), (_fallback, key + "_mac"), (_fallback, key)) if IS_MAC \
+        else ((_strings, key), (_fallback, key))
+    text = next((table[k] for table, k in order if table.get(k) and isinstance(table[k], str)), key)  # a number in a hand-made file is skipped
     try:
         return text.format(**values) if values else text
     except (KeyError, IndexError, ValueError):

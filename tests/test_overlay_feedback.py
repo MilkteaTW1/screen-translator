@@ -7,7 +7,7 @@ import time
 
 import numpy as np
 import pytest
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw
 from PySide6.QtGui import QImage
 from PySide6.QtWidgets import QApplication
 

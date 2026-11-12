@@ -1,6 +1,6 @@
 from conftest import arial
 import numpy as np
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw
 
 from screen_translator import tracking
 

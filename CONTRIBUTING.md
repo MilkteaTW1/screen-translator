@@ -17,6 +17,7 @@ cd screen-translator
 python -m venv .venv
 .venv\Scripts\pip install -r requirements-dev.txt       # macOS/Linux: .venv/bin/pip
 .venv\Scripts\python -m pytest                          # all tests should pass
+.venv\Scripts\pip install ruff; .venv\Scripts\ruff check src tests   # the lint check CI runs
 .venv\Scripts\python scripts\launch.py                  # run the app
 ```
 
