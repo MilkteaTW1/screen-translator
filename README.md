@@ -4,7 +4,48 @@
 
 **[⬇ Download for Windows, Mac or Android | 下載 Windows / Mac / Android 版](https://github.com/MilkteaTW1/screen-translator/releases/latest)** (free, MIT)
 
+**Read any app, game or web page in your own language: the translation is drawn right above the original text, and it can run with no internet at all.**
+
+[![Tests](https://github.com/MilkteaTW1/screen-translator/actions/workflows/test.yml/badge.svg)](https://github.com/MilkteaTW1/screen-translator/actions/workflows/test.yml)
+[![Latest release](https://img.shields.io/github/v/release/MilkteaTW1/screen-translator)](https://github.com/MilkteaTW1/screen-translator/releases/latest)
+![License: MIT](https://img.shields.io/badge/license-MIT-blue)
+
 ![Screen Translator in action](docs/promo.gif)
+
+<!-- Screenshot slots (add the files to docs/ when ready):
+     docs/screenshot-web.png      a web page with translations above each paragraph
+     docs/screenshot-game.png     region / game mode over a dialogue box
+     docs/screenshot-settings.png the settings window (Translate tab) -->
+
+## Quick start
+
+1. Download `ScreenTranslator-Setup-x.y.z.exe` from the [latest release](https://github.com/MilkteaTW1/screen-translator/releases/latest) and install it (no admin rights needed).
+2. Pick the language on screen and the language you want; press **Start**.
+3. Translations appear above each block of text. **Ctrl+Alt+T** starts/stops, **Ctrl+Alt+H** hides them,
+   **Ctrl+Alt+R** limits it to a rectangle (subtitles, a game's dialogue box).
+
+## Privacy: what stays on your computer
+
+| Step | Where it runs |
+| --- | --- |
+| Reading the screen (OCR) | Always on your computer (Windows OCR / Apple Vision / ML Kit on Android) |
+| Translation, default | Google Translate: the recognised text is sent to Google |
+| Translation, offline | Turn **Use Google** off: Argos Translate (or the optional TranslateGemma 4B model) translates on your computer, nothing leaves it |
+| Translation, your choice | Your own DeepL key, Gemini key, LibreTranslate or Ollama / LM Studio server |
+| Speech captions | Whisper / sherpa-onnx, always on your computer |
+
+No account, no telemetry. The only other network requests are the update check on GitHub and the downloads you agree to (language packs, speech models).
+Google's answers are remembered in a local file so the same text is not sent twice; turning that option off deletes it.
+
+## Supported languages
+
+- **Translate into**: English, Chinese (Traditional / Simplified), Japanese, Korean, French, German, Spanish, Russian,
+  Italian, Portuguese, Thai, Vietnamese, Indonesian, Arabic.
+- **Read from the screen**: any language Windows OCR has installed (Settings > Time & language > Language & region),
+  or *auto* to read every installed one. Offline translation needs the matching Argos pack, which the app offers to download.
+- **Interface**: English and Traditional Chinese; [adding a language](src/screen_translator/locales/README.md) is one JSON file.
+
+## About
 
 A free screen translator for Windows, macOS and Android. It reads the text on your screen with the built-in
 OCR (Windows OCR, Apple Vision on the Mac), translates it with Google Translate (or fully offline with
@@ -103,7 +144,7 @@ The app also asks to download missing packs when you choose a language. Argos la
 Pairs that do not involve English go through English, so `ja>zt` needs `ja>en` and `en>zt`.
 Argos codes: `zh` = Simplified Chinese, `zt` = Traditional Chinese.
 
-Closing the settings window quits the app. Settings are stored in `%APPDATA%\ScreenTranslator\settings.json`.
+The X button on the settings window asks the first time whether to keep running in the tray or quit. Settings are stored in `%APPDATA%\ScreenTranslator\settings.json`.
 The hidden `region` setting (`[left, top, width, height]`) limits scanning to part of the screen.
 
 ## Build a standalone exe
@@ -142,7 +183,36 @@ MIT
 
 [English](#screen-translator) | **繁體中文**
 
+**任何程式、遊戲、網頁,譯文直接顯示在原文正上方;不連網也能用。**
+
 ![Screen Translator 實際操作](docs/promo.gif)
+
+## 快速開始
+
+1. 到 [Releases](https://github.com/MilkteaTW1/screen-translator/releases/latest) 下載 `ScreenTranslator-Setup-x.y.z.exe` 安裝(不需系統管理員權限)。
+2. 選「螢幕上的語言」與「要翻成的語言」,按 **Start**。
+3. 譯文會出現在每段文字上方。**Ctrl+Alt+T** 開始/停止、**Ctrl+Alt+H** 隱藏譯文、
+   **Ctrl+Alt+R** 只翻譯框選的範圍(字幕、遊戲對話框)。
+
+## 隱私:哪些東西留在你的電腦
+
+| 步驟 | 在哪裡執行 |
+| --- | --- |
+| 讀取螢幕文字(OCR) | 一律在本機(Windows OCR / Apple Vision / Android 的 ML Kit) |
+| 翻譯(預設) | Google 翻譯:辨識出的文字會傳給 Google |
+| 翻譯(離線) | 關閉「使用 Google」:由本機的 Argos Translate(或選用的 TranslateGemma 4B)翻譯,資料不離開電腦 |
+| 翻譯(自選) | 你自己的 DeepL / Gemini 金鑰、LibreTranslate,或 Ollama / LM Studio 伺服器 |
+| 語音字幕 | Whisper / sherpa-onnx,一律在本機 |
+
+不需帳號、沒有使用追蹤。其他連線只有 GitHub 的更新檢查,以及你同意後才進行的下載(語言包、語音模型)。
+
+## 支援語言
+
+- **翻成**:英文、繁體中文、簡體中文、日文、韓文、法文、德文、西班牙文、俄文、義大利文、葡萄牙文、泰文、越南文、印尼文、阿拉伯文。
+- **讀取**:Windows 已安裝 OCR 的任何語言(設定 > 時間與語言 > 語言與區域),或選 *auto* 讀取所有已安裝語言。離線翻譯需要對應的 Argos 語言包,程式會詢問後下載。
+- **介面**:英文、繁體中文;[新增介面語言](src/screen_translator/locales/README.md)只要一個 JSON 檔。
+
+## 簡介
 
 免費的 Windows、macOS 與 Android 螢幕翻譯工具。它用系統內建 OCR(Windows OCR、Mac 的 Apple Vision)讀取螢幕上的文字,
 用 Google 翻譯翻譯(沒有網路或關掉 Google 時,改用 [Argos Translate](https://github.com/argosopentech/argos-translate) 完全離線翻譯),
@@ -230,7 +300,7 @@ run.bat
 不含英文的語言對會經由英文轉譯,例如 `ja>zt` 需要 `ja>en` 與 `en>zt`。
 Argos 代碼:`zh` = 簡體中文、`zt` = 繁體中文。
 
-按設定視窗的 X 會關閉整個程式。設定檔存放在 `%APPDATA%\ScreenTranslator\settings.json`。
+按設定視窗的 X 時,第一次會問要縮到系統匣還是全部關閉。設定檔存放在 `%APPDATA%\ScreenTranslator\settings.json`。
 隱藏設定 `region`(`[左, 上, 寬, 高]`)可以限制只掃描螢幕的一部分。
 
 ## 開發
