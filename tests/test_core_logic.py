@@ -231,3 +231,25 @@ def test_auto_language_is_guessed_from_the_letters():
     assert streaming.guess_language("你好", "auto") == "zh"
     assert streaming.guess_language("hello", "auto") == "en"
     assert streaming.guess_language("hello", "ja") == "ja"
+
+
+# --- Windows build: DLLs vendored by wheels ---------------------------------------------------------------------
+
+def test_the_build_puts_back_vendored_dlls_pyinstaller_left_out(tmp_path, monkeypatch):
+    import importlib.util
+    from pathlib import Path
+    path = Path(__file__).parents[1] / "scripts" / "copy_vendored_dlls.py"
+    spec = importlib.util.spec_from_file_location("copy_vendored_dlls", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    site, app = tmp_path / "site", tmp_path / "app"
+    for name in ("msvcp140-abc.dll", "vcomp140-def.dll"):
+        (site / "sentencepiece.libs").mkdir(parents=True, exist_ok=True)
+        (site / "sentencepiece.libs" / name).write_bytes(b"x")
+    (site / "unused.libs").mkdir()
+    (site / "unused.libs" / "a.dll").write_bytes(b"x")
+    (app / "_internal" / "sentencepiece.libs").mkdir(parents=True)
+    (app / "_internal" / "sentencepiece.libs" / "vcomp140-def.dll").write_bytes(b"x")
+    monkeypatch.setattr(mod.sysconfig, "get_paths", lambda: {"purelib": str(site)})
+    assert mod.copy_missing(app) == ["sentencepiece.libs/msvcp140-abc.dll"]
+    assert not (app / "_internal" / "unused.libs").exists()  # a package that is not in the build is left alone
