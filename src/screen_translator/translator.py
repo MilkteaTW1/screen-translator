@@ -46,7 +46,7 @@ LATIN_WORD_RE = re.compile(r"[A-Za-z][A-Za-z0-9'’\-]*")
 def ocr_tag_to_code(tag, supported_codes):
     low = tag.lower()
     if low.startswith("zh"):
-        return "zh-TW" if ("hant" in low or low.endswith(("-tw", "-hk"))) else "zh-CN"
+        return "zh-TW" if ("hant" in low or low.endswith(("-tw", "-hk", "-mo"))) else "zh-CN"
     base = low.split("-")[0]
     return base if base in supported_codes else "auto"
 
@@ -540,6 +540,8 @@ class Translator:
         if self._limits:
             groups = groups[:1]  # just found out whether Google answers again: one request, not a screenful
         groups = groups[:self._google_slots(len(groups))]  # a budget: what is over it is translated offline instead
+        if not groups:
+            return {}  # our own budget is used up: nothing was asked, so Google did not fail and must not be backed off
 
         limited = []
 
