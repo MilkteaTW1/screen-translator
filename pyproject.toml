@@ -1,3 +1,15 @@
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 130
+
+[tool.ruff.lint]
+# Errors only (syntax, undefined names, unused imports); the code style itself is not enforced.
+select = ["E9", "F"]
+# F402: loops reuse the short name `t` in functions that never call the i18n `t()`.
+ignore = ["F402"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["F841"]  # `qapp = QApplication(...)` keeps Qt alive for the test

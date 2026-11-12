@@ -2,9 +2,7 @@
 CTranslate2, which the app already uses for the standard packs. It is a 1.5 GB download the user chooses to make,
 slower than the standard packs (about half a second a sentence) and clearly better at wording, idioms and
 words with several meanings. One model covers every language pair, with no detour through English."""
-import os
 import re
-from pathlib import Path
 
 from . import packs
 from .plat import data_dir

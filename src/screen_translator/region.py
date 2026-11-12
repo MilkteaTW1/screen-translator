@@ -1,5 +1,5 @@
 """Drag a rectangle on the screen to choose the only part that is translated (subtitles, a game's dialogue box)."""
-from PySide6.QtCore import QPoint, QRect, Qt, Signal
+from PySide6.QtCore import QRect, Qt, Signal
 from PySide6.QtGui import QColor, QPainter
 from PySide6.QtWidgets import QWidget
 
