@@ -46,6 +46,7 @@ class SpeechEngine(
     }
 
     @Volatile private var running = false
+    @Volatile private var cancelled = false  // stopped by the user: nothing still queued or running may show up any more
     private var recorder: AudioRecord? = null
     private val worker = Executors.newSingleThreadExecutor()  // all Whisper work, one piece at a time
     private val translating = Executors.newSingleThreadExecutor()  // translation, beside Whisper so listening never waits for the network
@@ -69,6 +70,8 @@ class SpeechEngine(
 
     fun stop() {
         running = false
+        cancelled = true
+        worker.shutdownNow()  // drop the sentences still waiting: they belong to what was said before the stop
     }
 
     private fun run(kind: AudioKind, projection: MediaProjection?, testFile: String?) {
@@ -135,12 +138,13 @@ class SpeechEngine(
                 whisper?.close()
                 synchronized(translators) { translators.values.forEach { it.close() } }
             }.start()
-            if (testFile == null) onPartial("", "")
+            if (testFile == null && !cancelled) onPartial("", "")
         }
     }
 
     /** A finished sentence: transcribed again in full, and it replaces the live line. */
     private fun finish(audio: FloatArray) {
+        if (cancelled) return
         val ended = sentence - 1  // the sentence that just ended (the counter was already moved on)
         val seconds = audio.size / RATE.toDouble()
         val live = lastLive
@@ -152,7 +156,7 @@ class SpeechEngine(
             translating.execute {
                 val out = translate(live.first, code)
                 Log.i(TAG, "speech line: reused the live reading, translated in ${SystemClock.uptimeMillis() - t0} ms")
-                onLine(live.first, out)
+                if (!cancelled) onLine(live.first, out)
             }
             onPartial("", "")
             return
@@ -167,9 +171,9 @@ class SpeechEngine(
                 Log.i(TAG, "speech line: ${"%.1f".format(seconds)} s of audio read again in ${SystemClock.uptimeMillis() - t0} ms")
                 if (heard != null) {
                     val (code, text) = heard
-                    translating.execute { onLine(text, translate(text, code)) }
+                    if (!cancelled) translating.execute { val out = translate(text, code); if (!cancelled) onLine(text, out) }
                 }
-                if (forSentence == sentence) onPartial("", "")
+                if (forSentence == sentence && !cancelled) onPartial("", "")
             } catch (e: Throwable) {
                 Log.w(TAG, "speech sentence failed: ${e.message}")
             } finally {
@@ -180,12 +184,13 @@ class SpeechEngine(
 
     /** The sentence still being spoken: its words are shown as soon as they are read; it is translated once, when it ends. */
     private fun live(audio: FloatArray) {
+        if (cancelled) return
         liveBusy = true
         val forSentence = sentence
         worker.execute {
             try {
                 val heard = whisper?.transcribe(normalize(audio), threads, language)
-                if (heard != null && forSentence == sentence && !stumble(heard.second)) {
+                if (heard != null && !cancelled && forSentence == sentence && !stumble(heard.second)) {
                     val (code, text) = heard
                     lastLive = text to forSentence
                     lastLiveSeconds = audio.size / RATE.toDouble()

@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
 
 from . import better, gemma, ocr, tracking
 from .overlay import CaptionOverlay, CoverChip, Overlay
+from . import streaming
 from .speech import MODELS, SpeechWorker, download_model, ensure_streams, find_model, import_model
 from . import __version__, i18n, packs, updater
 from .i18n import t
@@ -43,7 +44,7 @@ DEFAULTS = {
     "hide_from_capture": True, "skip_names": True, "disk_cache": True, "hide_on_scroll": False, "close_action": "ask",
     "autostart": False, "start_on_launch": False,
     "region": None, "hover_mode": False, "cover_all": False, "game_mode": False, "hotkeys": True,
-    "speech_enabled": False, "speech_source": "system", "speech_model": "base", "speech_lang": "auto",
+    "speech_enabled": False, "speech_source": "system", "speech_model": "base", "speech_lang": "auto", "speech_fast": True,
     "use_google": True, "offline_engine": "standard",
     "server_kind": "off", "server_url": "", "server_key": "", "server_model": "",
     "ui_language": "",  # interface language; empty = the one Windows is set to
@@ -806,6 +807,10 @@ class Panel(QWidget):
         self.server_key.setEchoMode(QLineEdit.Password)
         self.server_model = QLineEdit(s["server_model"])
         self.speech_enabled = self._check("speech_enable", s["speech_enabled"])
+        self.speech_fast = QComboBox()  # fast: words while they are spoken; accurate: a whole sentence read by Whisper
+        self.speech_fast.addItem("", True)
+        self.speech_fast.addItem("", False)
+        self._select(self.speech_fast, bool(s["speech_fast"]))
         self.speech_source = QComboBox()
         self.speech_source.addItem("", "system")
         self.speech_source.addItem("", "mic")
@@ -884,6 +889,7 @@ class Panel(QWidget):
         lay = QVBoxLayout(speech_tab)
         lay.addWidget(self.speech_enabled)
         speech_form = QFormLayout()
+        self._row(speech_form, "speech_engine", self.speech_fast)
         self._row(speech_form, "audio_from", self.speech_source)
         self._row(speech_form, "speech_language", self.speech_lang)
         self._row(speech_form, "speech_model", self.speech_model)
@@ -1000,6 +1006,9 @@ class Panel(QWidget):
             w.currentIndexChanged.connect(self.apply)
             w.currentIndexChanged.connect(self._restart_speech)
         self.speech_lang.currentIndexChanged.connect(self.apply)
+        self.speech_lang.currentIndexChanged.connect(self._restart_speech)
+        self.speech_fast.currentIndexChanged.connect(self.apply)
+        self.speech_fast.currentIndexChanged.connect(self._restart_speech)
         self.speech_model_done.connect(self._speech_model_done)
         if speech is not None:
             speech.status.connect(self.speech_state.setText)
@@ -1048,6 +1057,8 @@ class Panel(QWidget):
             self.server_kind.setItemText(i, t(key))
         self.speech_source.setItemText(0, t("audio_system"))
         self.speech_source.setItemText(1, t("audio_mic"))
+        self.speech_fast.setItemText(0, t("engine_fast"))
+        self.speech_fast.setItemText(1, t("engine_accurate"))
         self.speech_lang.setItemText(0, t("auto_detect"))
         if self.source.itemData(0) == "auto":
             self.source.setItemText(0, t("auto_detect"))
@@ -1105,6 +1116,7 @@ class Panel(QWidget):
             "autostart": self.autostart.isChecked(), "start_on_launch": self.start_on_launch.isChecked(),
             "speech_enabled": self.speech_enabled.isChecked(), "speech_source": self.speech_source.currentData(),
             "speech_model": self.speech_model.currentData(), "speech_lang": self.speech_lang.currentData(),
+            "speech_fast": bool(self.speech_fast.currentData()),
             "ui_language": self.ui_language,
         }
 
@@ -1233,10 +1245,46 @@ class Panel(QWidget):
             self.speech.stop()
             self.captions.clear()
             self.speech_state.setText("")
+        else:
+            self._start_or_ask()
+
+    def _stream_key(self):
+        """The streaming model for the chosen language when fast captions are on, else None (Whisper does it)."""
+        return streaming.key_for(self.speech_lang.currentData()) if self.speech_fast.currentData() else None
+
+    def _start_or_ask(self):
+        """Start listening; the model it needs is asked for first if it is not there."""
+        key = self._stream_key()
+        if key:
+            if streaming.find(key):
+                self._start_speech()
+            else:
+                self._ask_stream_model(key)
         elif find_model(self.speech_model.currentData()):
             self._start_speech()
         else:
             self._ask_model(self.speech_model.currentData())
+
+    def _ask_stream_model(self, key):
+        box = QMessageBox(self)
+        box.setWindowTitle(t("speech_model_title"))
+        box.setText(t("stream_model_text", mb=streaming.MODELS[key]["mb"]))
+        download = box.addButton(t("btn_download"), QMessageBox.AcceptRole)
+        box.addButton(t("btn_not_now"), QMessageBox.RejectRole)
+        box.exec()
+        if box.clickedButton() is download:
+            self.speech_state.setText(t("speech_downloading", name=key))
+            threading.Thread(target=self._download_stream_model, args=(key,), daemon=True).start()
+        else:
+            self.speech_model_done.emit(False)
+
+    def _download_stream_model(self, key):
+        try:
+            streaming.download(key)
+            self.speech_model_done.emit(True)
+        except Exception as e:
+            self.pack_status.emit(t("download_failed", err=e))
+            self.speech_model_done.emit(False)
 
     def _start_speech(self):
         self.speech.configure(self.current())
@@ -1247,7 +1295,7 @@ class Panel(QWidget):
     def _restart_speech(self, *_):
         if self.speech is not None and self.speech.running:
             self.speech.stop()
-            QTimer.singleShot(800, self._start_speech)
+            QTimer.singleShot(300, self._start_or_ask)
 
     def _ask_model(self, name):
         """The speech model is a one-time download; the user decides how to get it."""
