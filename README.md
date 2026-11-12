@@ -20,7 +20,7 @@
 ## Quick start
 
 1. Download `ScreenTranslator-Setup-x.y.z.exe` from the [latest release](https://github.com/MilkteaTW1/screen-translator/releases/latest) and install it (no admin rights needed).
-2. Pick the language on screen and the language you want; press **Start**.
+2. Pick the language on screen and the language you want; press **Start screen translation**.
 3. Translations appear above each block of text. **Ctrl+Alt+T** starts/stops, **Ctrl+Alt+H** hides them,
    **Ctrl+Alt+R** limits it to a rectangle (subtitles, a game's dialogue box).
 
@@ -30,7 +30,7 @@
 | --- | --- |
 | Reading the screen (OCR) | Always on your computer (Windows OCR / Apple Vision / ML Kit on Android) |
 | Translation, default | Google Translate: the recognised text is sent to Google |
-| Translation, offline | Turn **Use Google** off: Argos Translate (or the optional TranslateGemma 4B model) translates on your computer, nothing leaves it |
+| Translation, offline | Untick **Use Google Translate first** (Quality tab): Argos Translate (or the optional TranslateGemma 4B model) translates on your computer, nothing leaves it |
 | Translation, your choice | Your own DeepL key, Gemini key, LibreTranslate or Ollama / LM Studio server |
 | Speech captions | Whisper / sherpa-onnx, always on your computer |
 
@@ -42,7 +42,8 @@ Google's answers are remembered in a local file so the same text is not sent twi
 - **Translate into**: English, Chinese (Traditional / Simplified), Japanese, Korean, French, German, Spanish, Russian,
   Italian, Portuguese, Thai, Vietnamese, Indonesian, Arabic.
 - **Read from the screen**: any language Windows OCR has installed (Settings > Time & language > Language & region),
-  or *auto* to read every installed one. Offline translation needs the matching Argos pack, which the app offers to download.
+  or *auto* to read every installed one. Offline translation works for the 15 languages above (it needs the matching
+  Argos pack, which the app offers to download); other screen languages are translated by Google or your own server only.
 - **Interface**: English and Traditional Chinese; [adding a language](src/screen_translator/locales/README.md) is one JSON file.
 
 ## About
@@ -190,7 +191,7 @@ MIT
 ## 快速開始
 
 1. 到 [Releases](https://github.com/MilkteaTW1/screen-translator/releases/latest) 下載 `ScreenTranslator-Setup-x.y.z.exe` 安裝(不需系統管理員權限)。
-2. 選「螢幕上的語言」與「要翻成的語言」,按 **Start**。
+2. 選「螢幕上的語言」與「要翻成的語言」,按 **開始翻譯畫面**(英文介面是 Start screen translation)。
 3. 譯文會出現在每段文字上方。**Ctrl+Alt+T** 開始/停止、**Ctrl+Alt+H** 隱藏譯文、
    **Ctrl+Alt+R** 只翻譯框選的範圍(字幕、遊戲對話框)。
 
@@ -200,7 +201,7 @@ MIT
 | --- | --- |
 | 讀取螢幕文字(OCR) | 一律在本機(Windows OCR / Apple Vision / Android 的 ML Kit) |
 | 翻譯(預設) | Google 翻譯:辨識出的文字會傳給 Google |
-| 翻譯(離線) | 關閉「使用 Google」:由本機的 Argos Translate(或選用的 TranslateGemma 4B)翻譯,資料不離開電腦 |
+| 翻譯(離線) | 在「品質」分頁取消勾選「優先使用 Google 翻譯」:由本機的 Argos Translate(或選用的 TranslateGemma 4B)翻譯,資料不離開電腦 |
 | 翻譯(自選) | 你自己的 DeepL / Gemini 金鑰、LibreTranslate,或 Ollama / LM Studio 伺服器 |
 | 語音字幕 | Whisper / sherpa-onnx,一律在本機 |
 
@@ -209,7 +210,7 @@ MIT
 ## 支援語言
 
 - **翻成**:英文、繁體中文、簡體中文、日文、韓文、法文、德文、西班牙文、俄文、義大利文、葡萄牙文、泰文、越南文、印尼文、阿拉伯文。
-- **讀取**:Windows 已安裝 OCR 的任何語言(設定 > 時間與語言 > 語言與區域),或選 *auto* 讀取所有已安裝語言。離線翻譯需要對應的 Argos 語言包,程式會詢問後下載。
+- **讀取**:Windows 已安裝 OCR 的任何語言(設定 > 時間與語言 > 語言與區域),或選 *auto* 讀取所有已安裝語言。上面 15 種語言可以離線翻譯(需要對應的 Argos 語言包,程式會詢問後下載);其他語言只能用 Google 或你自己的伺服器翻譯。
 - **介面**:英文、繁體中文;[新增介面語言](src/screen_translator/locales/README.md)只要一個 JSON 檔。
 
 ## 簡介

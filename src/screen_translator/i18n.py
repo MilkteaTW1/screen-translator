@@ -75,7 +75,7 @@ def t(key, **values):
     # English macOS one, so a translation that has no "_mac" keys is still shown in its own language on a Mac.
     order = ((_strings, key + "_mac"), (_strings, key), (_fallback, key + "_mac"), (_fallback, key)) if IS_MAC \
         else ((_strings, key), (_fallback, key))
-    text = next((table[k] for table, k in order if table.get(k)), key)
+    text = next((table[k] for table, k in order if table.get(k) and isinstance(table[k], str)), key)  # a number in a hand-made file is skipped
     try:
         return text.format(**values) if values else text
     except (KeyError, IndexError, ValueError):

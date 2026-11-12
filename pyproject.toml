@@ -2,9 +2,6 @@
 pythonpath = ["src"]
 testpaths = ["tests"]
 
-[tool.ruff]
-line-length = 130
-
 [tool.ruff.lint]
 # Errors only (syntax, undefined names, unused imports); the code style itself is not enforced.
 select = ["E9", "F"]

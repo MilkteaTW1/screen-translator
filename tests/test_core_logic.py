@@ -21,7 +21,8 @@ def test_a_used_up_budget_does_not_back_off_google_or_blame_the_network(monkeypa
     assert tr.translate("Hello there, world.", "en", "zh-TW", "en-US", [], True, False) is None
     assert calls == []  # nothing was sent
     assert tr._fails == 0 and tr.google_state() == "ok"  # Google did not fail: it was not asked
-    assert tr.problem() != ("network", "")  # so the user is not told the internet is down
+    tr.google_error = "TimeoutError: timed out"  # even after an earlier failure
+    assert (tr.problem() or ("",))[0] != "network"  # the user is not told the internet is down
 
 
 # --- regression: a locale without macOS wording stays in its own language on a Mac -------------------------------
@@ -48,6 +49,13 @@ def test_placeholders_are_filled_and_a_bad_one_does_not_crash(tmp_path, monkeypa
     assert i18n.t("a", name="Ann") == "hi Ann"
     assert i18n.t("b", name="Ann") == "oops {"
     assert i18n.t("no_such_key") == "no_such_key"
+
+
+def test_a_number_in_a_locale_file_falls_back_to_english(tmp_path, monkeypatch):
+    (tmp_path / "xx.json").write_text(json.dumps({"_name": "T", "tab_general": 5}), encoding="utf-8")
+    monkeypatch.setattr(i18n, "USER_DIR", tmp_path)
+    i18n.load("xx")
+    assert i18n.t("tab_general") == "General"
 
 
 # --- language codes ---------------------------------------------------------------------------------------------
