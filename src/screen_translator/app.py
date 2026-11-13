@@ -17,6 +17,7 @@ from PySide6.QtCore import QObject, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import QAction, QDesktopServices, QIcon
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import (
+    QInputDialog,
     QApplication, QCheckBox, QFileDialog, QComboBox, QDoubleSpinBox, QFormLayout, QGroupBox, QHBoxLayout, QLabel,
     QLineEdit, QMenu, QMessageBox, QPlainTextEdit, QPushButton, QSpinBox, QSystemTrayIcon, QTabWidget, QVBoxLayout, QWidget,
 )
@@ -730,6 +731,7 @@ class Panel(QWidget):
     pack_finished = Signal()
     speech_model_done = Signal(bool)
     update_found = Signal(str, str)
+    versions_found = Signal(list)
     update_ready = Signal(str)
     language_changed = Signal()
     hidden_to_tray = Signal()
@@ -859,6 +861,9 @@ class Panel(QWidget):
         self.update_button = QPushButton()
         self._text(self.update_button.setText, "check_updates")
         self.update_button.clicked.connect(lambda: self.check_for_updates(quiet=False))
+        self.pick_version_button = QPushButton()  # any recent version, not only the newest (an update takes the newest)
+        self._text(self.pick_version_button.setText, "pick_version")
+        self.pick_version_button.clicked.connect(self.pick_version)
         self.version_label = QLabel()
         self._text(self.version_label.setText, "version_label", version=__version__)
         self.language_button = QPushButton()
@@ -1007,6 +1012,7 @@ class Panel(QWidget):
         self._text(app_box.setTitle, "group_app")
         box = QVBoxLayout(app_box)
         box.addWidget(self.update_button)
+        box.addWidget(self.pick_version_button)
         box.addWidget(self.diagnose_button)
         box.addWidget(self.version_label)
         lay.addWidget(app_box)
@@ -1032,6 +1038,7 @@ class Panel(QWidget):
         self.pack_status.connect(self.state.setText)
         self.pack_finished.connect(self._packs_ready)
         self.update_found.connect(self._offer_update)
+        self.versions_found.connect(self._choose_version)
         self.update_ready.connect(self._run_installer)
         self.interval.valueChanged.connect(self.apply)
         self.hide_capture.toggled.connect(self.apply)
@@ -1341,10 +1348,30 @@ class Panel(QWidget):
                 self.pack_status.emit(t("up_to_date"))
         threading.Thread(target=run, daemon=True).start()
 
-    def _offer_update(self, version, url):
+    def pick_version(self):
+        """Lists the recent releases so the user can install any of them (the default, an update, is the newest)."""
+        self.pick_version_button.setEnabled(False)
+
+        def run():
+            self.versions_found.emit(updater.releases())
+        threading.Thread(target=run, daemon=True).start()
+
+    def _choose_version(self, versions):
+        self.pick_version_button.setEnabled(True)
+        if not versions:
+            self.pack_status.emit(t("update_no_connection"))
+            return
+        labels = [f"{v}  ({t('version_latest')})" if i == 0 else v for i, (v, _) in enumerate(versions)]
+        label, ok = QInputDialog.getItem(self, t("pick_version"), t("pick_version_text", current=__version__),
+                                         labels, 0, False)
+        if ok:
+            version, url = versions[labels.index(label)]
+            self._offer_update(version, url, "version_text")
+
+    def _offer_update(self, version, url, text="update_text"):
         box = QMessageBox(self)
         box.setWindowTitle(t("update_title"))
-        box.setText(t("update_text", version=version, current=__version__))
+        box.setText(t(text, version=version, current=__version__))
         yes = box.addButton(t("btn_update_now"), QMessageBox.AcceptRole)
         box.addButton(t("btn_later"), QMessageBox.RejectRole)
         box.exec()
