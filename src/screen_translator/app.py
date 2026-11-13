@@ -1382,7 +1382,7 @@ class Panel(QWidget):
 
     def _stream_key(self):
         """The streaming model for the chosen language when fast captions are on, else None (Whisper does it)."""
-        return streaming.key_for(self.speech_lang.currentData()) if self.speech_fast.currentData() else None
+        return streaming.usable_key(self.speech_lang.currentData()) if self.speech_fast.currentData() else None
 
     def _start_or_ask(self):
         """Start listening; the model it needs is asked for first if it is not there."""

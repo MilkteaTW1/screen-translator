@@ -222,7 +222,7 @@ def test_streaming_text_is_put_in_sentence_case():
 
 def test_streaming_model_for_each_language():
     assert streaming.key_for("en") == "en"
-    assert streaming.key_for("auto") is None and streaming.key_for("zh") == "zh-en"
+    assert streaming.key_for("auto") == "multi" and streaming.key_for("zh") == "zh-en"
     assert streaming.key_for("ko") == "ko" and streaming.key_for("ja") == "multi"
     assert streaming.key_for("fr") is None  # only Whisper reads it
 

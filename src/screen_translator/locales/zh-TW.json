@@ -119,6 +119,7 @@
   "no_ocr_mac": "Apple Vision 找不到任何 OCR 語言",
   "speech_audio_error": "音訊錯誤:{err}",
   "speech_loading": "正在載入語音模型…",
+  "speech_moved": "聽到其他語言({lang}):已切換到精準辨識。",
   "speech_model_error": "語音模型錯誤:{err}",
   "speech_error": "語音錯誤:{err}",
   "speech_packs_needed": "語音需要語言包:{names}",

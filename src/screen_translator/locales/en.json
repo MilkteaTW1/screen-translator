@@ -119,6 +119,7 @@
   "no_ocr_mac": "Apple Vision found no OCR language",
   "speech_audio_error": "Audio error: {err}",
   "speech_loading": "Loading speech model...",
+  "speech_moved": "Heard another language ({lang}): switched to the accurate reader.",
   "speech_model_error": "Speech model error: {err}",
   "speech_error": "Speech error: {err}",
   "speech_packs_needed": "Language packs needed for speech: {names}",

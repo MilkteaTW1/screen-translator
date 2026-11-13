@@ -221,6 +221,9 @@ class SpeechWorker(QObject):
         self.translator = Translator()
         self.running = False
         self.settings = {}
+        self.lang_now = None  # the spoken language in use when "auto" moved on (a code, or "whisper"); None: the setting
+        self._whisper = None  # (model name, loaded model): shared by the language check and the transcription
+        self._whisper_lock = threading.Lock()
         self.gen = 0  # counts starts and stops: threads of an earlier run must not touch the current one
         self._reset()
 
@@ -234,6 +237,7 @@ class SpeechWorker(QObject):
         self._live_job = None  # (epoch, text, language) for the translation thread to draft next: only the latest is kept
         self._live_translation = (-1, "")  # (epoch, translation) shown beside the words until the next one is made
         self._last_live = (-1, "", "", 0.0)  # (epoch, text, language, seconds of audio it covered)
+        self.detect_q = queue.Queue(maxsize=2)  # finished sentences for the language check ("auto" with streaming)
 
     def configure(self, settings):
         self.settings = settings
@@ -248,24 +252,41 @@ class SpeechWorker(QObject):
         self.running = True
         self.gen += 1  # threads of a run that was stopped meanwhile see the new number and end
         self._reset()  # nothing heard before the stop may be shown after the start
+        self.lang_now = None
+        self._spawn(self.gen)
+
+    def _spawn(self, gen):
         key = self.stream_key()
         if key:  # words as they are spoken: no Whisper, no waiting for a whole reading
-            targets = (self._capture, lambda gen: self._stream(gen, key), self._translate_loop)
+            targets = [self._capture, lambda g: self._stream(g, key), self._translate_loop]
+            if self.settings.get("speech_lang", "auto") == "auto" and self.lang_now is None:
+                targets.append(self._detect)  # "auto": Whisper listens to finished sentences and moves on if it is not en/zh
         else:
-            targets = (self._capture, self._segment, self._transcribe, self._translate_loop)
+            targets = [self._capture, self._segment, self._transcribe, self._translate_loop]
         for target in targets:
-            threading.Thread(target=target, args=(self.gen,), daemon=True).start()
+            threading.Thread(target=target, args=(gen,), daemon=True).start()
+
+    def _get_whisper(self):
+        with self._whisper_lock:
+            name = self.settings["speech_model"]
+            if self._whisper is None or self._whisper[0] != name:
+                path = find_model(name)
+                if path is None:
+                    raise RuntimeError("speech model is not installed")
+                self._whisper = (name, whisper_model_class()(str(path), device="cpu", compute_type="int8", cpu_threads=3))
+            return self._whisper[1]
 
     def stream_key(self):
         """The streaming model to use for the chosen language, or None (Whisper: switched off, no model for it, not downloaded)."""
         if not self.settings.get("speech_fast", True):
             return None
-        key = streaming.key_for(self.settings.get("speech_lang", "auto"))
+        key = streaming.usable_key(self.lang_now or self.settings.get("speech_lang", "auto"))
         return key if key and streaming.find(key) else None
 
     def stop(self):
         self.running = False
         self.gen += 1
+        self._whisper = None  # frees the memory; the next start loads it again if it is needed
 
     def _alive(self, gen):
         return self.running and gen == self.gen
@@ -316,12 +337,8 @@ class SpeechWorker(QObject):
 
     def _transcribe(self, gen):
         try:
-            WhisperModel = whisper_model_class()
-            path = find_model(self.settings["speech_model"])
-            if path is None:
-                raise RuntimeError("speech model is not installed")
             self.status.emit(t("speech_loading"))
-            model = WhisperModel(str(path), device="cpu", compute_type="int8", cpu_threads=3)
+            model = self._get_whisper()
         except Exception as e:
             if gen == self.gen:
                 self.running = False
@@ -359,7 +376,10 @@ class SpeechWorker(QObject):
         if not self._alive(gen):
             return
         self.status.emit(t("speech_listening"))
-        spoken = self.settings.get("speech_lang", "auto")
+        spoken = self.lang_now or self.settings.get("speech_lang", "auto")
+        checking = spoken == "auto"  # "auto" streams with the en/zh model while Whisper checks the language (_detect)
+        watch = streaming.AutoLanguage()
+        sentence = []  # the audio of the sentence being spoken, for that check
         shown = ""
         traditional = str(self.settings.get("target", "")).lower() in ("zh-tw", "zh-hk", "zh-hant")
         while self._alive(gen):
@@ -375,6 +395,16 @@ class SpeechWorker(QObject):
                 continue
             if not self._alive(gen):
                 return
+            if checking:
+                if len(sentence) < 300:  # 30 s is more than enough to hear the language
+                    sentence.append(chunk)
+                if ended:
+                    if len(sentence) >= 12 and watch.due():  # at least 1.2 s
+                        try:
+                            self.detect_q.put_nowait(np.concatenate(sentence))
+                        except queue.Full:
+                            pass
+                    sentence = []
             code = streaming.guess_language(text, spoken)
             if code == "zh" and traditional and text:
                 from zhconv import convert
@@ -398,6 +428,33 @@ class SpeechWorker(QObject):
                     self._live_job = (self.epoch, text, code)
                 translation = self._live_translation[1] if self._live_translation[0] == self.epoch else ""
                 self.partial.emit(text, translation)
+
+    def _detect(self, gen):
+        """"auto" with streaming: Whisper hears the language of finished sentences. The eight languages the fast captions read stay
+        on them; anything else (French, Korean...) moves to a reader that knows it (Whisper, or a streaming model that has it)."""
+        watch = streaming.AutoLanguage()
+        while self._alive(gen):
+            try:
+                audio = self.detect_q.get(timeout=0.5)
+            except queue.Empty:
+                continue
+            try:
+                model = self._get_whisper()
+                language, prob, _ = model.detect_language(normalize(audio))
+            except Exception:
+                return  # no Whisper model here, or it failed: "auto" simply stays on the English/Chinese captions
+            move = watch.add(language, prob)
+            if move and self._alive(gen):
+                self._move_to(move, gen)
+                return
+
+    def _move_to(self, code, gen):
+        key = streaming.key_for(code)
+        self.lang_now = code if key and streaming.find(key) else "whisper"  # "whisper" has no streaming model
+        self.status.emit(t("speech_moved", lang=code))
+        self.gen += 1
+        self._reset()
+        self._spawn(self.gen)
 
     def _translate_loop(self, gen):
         """Translation runs here, beside the transcription, so a slow network never holds up the next reading. Finished
