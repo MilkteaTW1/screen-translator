@@ -24,6 +24,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
 import com.google.mlkit.common.model.DownloadConditions
 import com.google.mlkit.common.model.RemoteModelManager
+import com.google.mlkit.nl.translate.TranslateLanguage
 import com.google.mlkit.nl.translate.TranslateRemoteModel
 import io.github.milkteatw1.screentranslator.Ui.dp
 
@@ -151,10 +152,15 @@ class MainActivity : ComponentActivity() {
         speechCard.addView(Ui.text(ctx, getString(R.string.source_note), 12f, Ui.MUTED).apply { setPadding(0, dp(8), 0, 0) })
         speechCard.addView(Ui.label(ctx, getString(R.string.spoken_language)))
         // Whisper hears every language and says which it was; a fixed language only helps when detection guesses wrong.
-        val spokenCodes = listOf("auto") + Langs.sources.map { it.code }
-        val speechLang = Ui.spinner(ctx, listOf(getString(R.string.auto_detect)) + Langs.sources.map { it.label },
+        val spokenCodes = listOf("auto") + Langs.spoken.map { it.code }
+        val speechLang = Ui.spinner(ctx, listOf(getString(R.string.auto_detect)) + Langs.spoken.map { it.label },
             spokenCodes.indexOf(prefs.spokenLanguage).coerceAtLeast(0))
         speechCard.addView(speechLang)
+        speechCard.addView(Ui.label(ctx, getString(R.string.speech_engine_label)))
+        val engineChoice = Ui.spinner(ctx, listOf(getString(R.string.engine_fast), getString(R.string.engine_accurate)),
+            if (prefs.speechFast) 0 else 1)
+        speechCard.addView(engineChoice)
+        speechCard.addView(Ui.text(ctx, getString(R.string.speech_engine_note), 12f, Ui.MUTED).apply { setPadding(0, dp(8), 0, 0) })
         speechCard.addView(Ui.label(ctx, getString(R.string.speech_model_label)))
         val modelChoice = Ui.spinner(ctx, WhisperModel.models.map {
             getString(if (it.name == "base") R.string.model_base else R.string.model_tiny, it.megabytes)
@@ -357,6 +363,7 @@ class MainActivity : ComponentActivity() {
             prefs.captionTop = look.top
             prefs.captionLines = look.lines
             prefs.captionShowOriginal = look.showOriginal
+            prefs.speechFast = engineChoice.selectedItemPosition == 0
         }
         for (s in listOf(google, remember, skip, hideOnScroll, gameMode, coverAll, captionShowOriginal)) {
             s.setOnCheckedChangeListener { _, _ -> save(); showSample() }
@@ -368,7 +375,7 @@ class MainActivity : ComponentActivity() {
             override fun afterTextChanged(s: android.text.Editable?) { save() }
         })
         val saveOnPick = object : AdapterView.OnItemSelectedListener {
-            var first = 2
+            var first = 3
             override fun onItemSelected(p: AdapterView<*>?, v: View?, pos: Int, id: Long) {
                 if (first > 0) { first--; return }
                 save()
@@ -378,6 +385,7 @@ class MainActivity : ComponentActivity() {
         captionPosition.onItemSelectedListener = saveOnPick
         speechLang.onItemSelectedListener = saveOnPick
         modelChoice.onItemSelectedListener = saveOnPick
+        engineChoice.onItemSelectedListener = saveOnPick
         soundSource.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
             var first = 1
             override fun onItemSelected(p: AdapterView<*>?, v: View?, pos: Int, id: Long) {
@@ -600,6 +608,18 @@ class MainActivity : ComponentActivity() {
     /** Speech recognition needs an offline model (about 40 MB); the user decides whether and how to download it. */
     private fun ensureSpeechModel(onReady: () -> Unit) {
         if (!prefs.speech) { onReady(); return }
+        val fast = prefs.streamingModel
+        if (fast != null) {
+            if (StreamingModel.isInstalled(this, fast)) { onReady(); return }
+            AlertDialog.Builder(this)
+                .setTitle(R.string.stream_model_title)
+                .setMessage(getString(R.string.stream_model_text, fast.megabytes))
+                .setPositiveButton(R.string.wifi_only) { _, _ -> downloadStream(fast, true, onReady) }
+                .setNeutralButton(R.string.any_network) { _, _ -> downloadStream(fast, false, onReady) }
+                .setNegativeButton(R.string.not_now) { _, _ -> status.text = getString(R.string.speech_model_needed) }
+                .show()
+            return
+        }
         val model = prefs.whisperModel
         if (WhisperModel.isInstalled(this, model)) { onReady(); return }
         AlertDialog.Builder(this)
@@ -609,6 +629,16 @@ class MainActivity : ComponentActivity() {
             .setNeutralButton(R.string.any_network) { _, _ -> downloadModel(model, false, onReady) }
             .setNegativeButton(R.string.not_now) { _, _ -> status.text = getString(R.string.speech_model_needed) }
             .show()
+    }
+
+    private fun downloadStream(model: StreamingModel.Spec, wifiOnly: Boolean, onReady: () -> Unit) {
+        status.text = getString(R.string.speech_model_downloading)
+        StreamingModel.download(this, model, wifiOnly,
+            progress = { pct -> runOnUiThread { status.text = getString(R.string.speech_model_progress, pct) } },
+            done = { err -> runOnUiThread {
+                if (err == null) { status.text = getString(R.string.speech_model_ready); onReady() }
+                else status.text = getString(R.string.download_failed, err.message ?: "")
+            } })
     }
 
     private fun downloadModel(model: WhisperModel.Spec, wifiOnly: Boolean, onReady: () -> Unit) {
@@ -626,7 +656,7 @@ class MainActivity : ComponentActivity() {
         // Needed even with Google on: it is what translates when Google can't (no internet, or "too many requests").
         val langs = mutableListOf(prefs.targetLang.code)
         if (prefs.screenText) langs += prefs.sourceLang.code
-        if (prefs.speech && prefs.spokenLanguage != "auto") langs += prefs.spokenLanguage
+        if (prefs.speech && prefs.spokenLanguage != "auto" && TranslateLanguage.fromLanguageTag(prefs.spokenLanguage) != null) langs += prefs.spokenLanguage
         val needed = langs.filter { it != "en" }.distinct()
         val manager = RemoteModelManager.getInstance()
         manager.getDownloadedModels(TranslateRemoteModel::class.java).addOnSuccessListener { have ->
@@ -646,7 +676,7 @@ class MainActivity : ComponentActivity() {
             .show()
     }
 
-    private fun name(code: String) = (Langs.sources + Langs.targets).firstOrNull { it.code == code }?.label ?: code
+    private fun name(code: String) = (Langs.spoken + Langs.targets).firstOrNull { it.code == code }?.label ?: code
 
     private fun download(codes: List<String>, wifiOnly: Boolean, onReady: () -> Unit) {
         val conditions = DownloadConditions.Builder().apply { if (wifiOnly) requireWifi() }.build()

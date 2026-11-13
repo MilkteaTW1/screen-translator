@@ -22,13 +22,16 @@ import java.util.concurrent.TimeUnit
 enum class AudioKind { SYSTEM, MICROPHONE }
 
 /**
- * Listens (what the phone plays, or the microphone), recognises speech offline with Whisper, which also says which
- * language it is, and translates each sentence. The sentence being spoken is shown live and replaced once it ends.
+ * Listens (what the phone plays, or the microphone), recognises speech offline and translates each sentence. Either with
+ * Whisper (cuts the sound into sentences, says which language it is) or, for the languages that have one and when the
+ * user chose fast captions, with a streaming model that shows the words while they are spoken. The sentence being
+ * spoken is shown live and replaced once it ends.
  */
 class SpeechEngine(
     private val context: Context,
     private val language: String,  // "auto" or a language code
     private val model: WhisperModel.Spec,
+    private val streaming: StreamingModel.Spec? = null,  // fast captions: the words while they are spoken (null: Whisper, a sentence at a time)
     private val target: Lang,
     private val glossary: List<String>,
     private val useGoogle: Boolean,
@@ -58,6 +61,8 @@ class SpeechEngine(
     private var hansHant: android.icu.text.Transliterator? = null
     private val threads = (Runtime.getRuntime().availableProcessors() - 1).coerceIn(2, 4)
     @Volatile private var whisper: WhisperModel? = null
+    private var streamer: StreamRecognizer? = null
+    @Volatile private var streamShown = ""  // the live words of the sentence being spoken (streaming)
 
     /** [testFile]: a 16 kHz mono 16-bit WAV to feed instead of live audio (used to check the pipeline). */
     fun start(kind: AudioKind, projection: MediaProjection?, testFile: String? = null) {
@@ -77,7 +82,11 @@ class SpeechEngine(
     private fun run(kind: AudioKind, projection: MediaProjection?, testFile: String?) {
         try {
             onStatus("Loading speech model...")
-            whisper = WhisperModel.load(context, model) ?: throw IllegalStateException("speech model missing")
+            if (streaming != null) {
+                streamer = StreamRecognizer(context, streaming, 2)
+            } else {
+                whisper = WhisperModel.load(context, model) ?: throw IllegalStateException("speech model missing")
+            }
             val source = if (testFile != null) null else openRecord(kind, projection)
             recorder = source
             source?.startRecording()
@@ -116,6 +125,7 @@ class SpeechEngine(
                     warned = true
                     onStatus("🔇 " + context.getString(if (kind == AudioKind.SYSTEM) R.string.speech_silent_phone else R.string.speech_silent_mic))
                 }
+                if (streamer != null) { streamStep(streamer!!, chunk); continue }
                 val done = seg.feed(chunk)
                 if (done != null) {
                     sentence++
@@ -136,9 +146,45 @@ class SpeechEngine(
                 translating.shutdown()
                 translating.awaitTermination(30, TimeUnit.SECONDS)
                 whisper?.close()
+                streamer?.close()
                 synchronized(translators) { translators.values.forEach { it.close() } }
             }.start()
             if (testFile == null && !cancelled) onPartial("", "")
+        }
+    }
+
+    /**
+     * Fast captions: each 0.1 s chunk goes straight into the streaming recogniser and the words so far are shown at once.
+     * When the sentence ends it is translated (beside this, so listening never waits for the network) and replaces the live line.
+     */
+    private fun streamStep(recognizer: StreamRecognizer, chunk: FloatArray) {
+        var (text, ended) = try {
+            recognizer.feed(chunk)
+        } catch (e: Throwable) {
+            Log.w(TAG, "streaming speech failed: ${e.message}")
+            return
+        }
+        if (cancelled) return
+        val code = StreamingModel.guessLanguage(text, language)
+        if (code == "zh" && target.traditional && text.isNotEmpty()) text = hansHant?.transliterate(text) ?: text  // the model writes simplified characters
+        if (ended) {
+            val ending = sentence
+            sentence++
+            streamShown = ""
+            if (text.length >= 2) {
+                translating.execute {
+                    val out = translate(text, code)
+                    if (!cancelled) {
+                        onLine(text, out)
+                        if (sentence == ending + 1 && streamShown.isEmpty()) onPartial("", "")  // nothing new is being said: the live line goes
+                    }
+                }
+            } else {
+                onPartial("", "")
+            }
+        } else if (text.isNotEmpty() && text != streamShown) {
+            streamShown = text
+            onPartial(text, "")  // the words only: the sentence is translated once, when it ends
         }
     }
 

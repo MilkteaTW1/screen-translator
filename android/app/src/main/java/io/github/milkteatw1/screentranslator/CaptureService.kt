@@ -419,7 +419,7 @@ class CaptureService : Service() {
 
     private fun setUpSpeech(intent: Intent) {
         val engine = SpeechEngine(
-            this, prefs.spokenLanguage, prefs.whisperModel, tgt, glossary, prefs.useGoogle,
+            this, prefs.spokenLanguage, prefs.whisperModel, prefs.streamingModel, tgt, glossary, prefs.useGoogle,
             // late results of an engine that was stopped must not put captions back on the screen
             onPartial = { said, translation ->
                 if (this@CaptureService.speech != null) { partialAt = SystemClock.uptimeMillis(); overlay?.partial = said to translation; scheduleCaptionExpiry() }

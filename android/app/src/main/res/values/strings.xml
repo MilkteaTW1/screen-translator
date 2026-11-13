@@ -98,6 +98,12 @@
     <string name="speech_silent_phone">No sound from the phone. Is something playing? Some apps do not allow their sound to be recorded.</string>
     <string name="speech_silent_mic">No sound from the microphone.</string>
     <string name="auto_detect">Detect automatically</string>
+    <string name="speech_engine_label">Captions</string>
+    <string name="engine_fast">Fast: words appear while they are spoken</string>
+    <string name="engine_accurate">Accurate: a whole sentence at a time</string>
+    <string name="speech_engine_note">Fast needs a small extra model (English 72 MB, Chinese 200 MB, Korean 132 MB, Japanese, Vietnamese, Indonesian, Russian, Thai, Arabic 340 MB). With "Detect automatically", and for other languages, the accurate way is used.</string>
+    <string name="stream_model_title">Download fast speech model?</string>
+    <string name="stream_model_text">Fast captions need a speech model for this language (about %1$d MB, downloaded once). How do you want to download?</string>
     <string name="speech_model_label">Speech model</string>
     <string name="model_base">Base: more accurate (%1$d MB)</string>
     <string name="model_tiny">Tiny: lighter and faster (%1$d MB)</string>
