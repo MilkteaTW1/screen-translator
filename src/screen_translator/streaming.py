@@ -26,15 +26,27 @@ MODELS = {
 
 
 def key_for(language):
-    """The streaming model that reads the spoken [language] (a code), or None when only Whisper can. "auto" is Whisper's:
-    it hears the language by itself, and the streaming models each read only a few (the bilingual one would turn
-    Japanese or French into English and Chinese nonsense)."""
+    """The streaming model that reads the spoken [language] (a code), or None when only Whisper can. "auto" starts on
+    the eight-language one (words at once, no matter which of them is spoken); AutoLanguage moves it to another reader
+    when a language outside those is heard."""
+    if language == "auto":
+        return "multi"
     if language in ("zh", "en"):
         return "en" if language == "en" else "zh-en"
     for key, m in MODELS.items():
         if language in m["langs"]:
             return key
     return None
+
+
+AUTO_LANGS = frozenset(("en", "zh") + MODELS["multi"]["langs"])  # what the "auto" streaming model reads
+
+
+def usable_key(language):
+    """key_for, but "auto" takes a model that is already downloaded (the older English/Chinese one too) before asking for the big one."""
+    if language == "auto":
+        return next((k for k in ("multi", "zh-en") if find(k)), "multi")
+    return key_for(language)
 
 
 def find(key):
@@ -66,11 +78,47 @@ def tidy(text):
     return text
 
 
+_SCRIPTS = (("ja", "[぀-ヿ]"), ("zh", "[㐀-鿿]"), ("th", "[฀-๿]"), ("ru", "[Ѐ-ӿ]"), ("ar", "[؀-ۿ]"))
+
+
 def guess_language(text, spoken):
-    """The language code of what was recognised: the chosen one, or for 'auto' Chinese when there are Chinese letters."""
+    """The language code of what was recognised: the chosen one, or for 'auto' read from the letters (Latin letters are
+    taken for English, or Vietnamese when they carry its marks; Indonesian is only known when it is chosen)."""
     if spoken != "auto":
         return spoken
-    return "zh" if re.search("[㐀-鿿]", text) else "en"
+    for code, letters in _SCRIPTS:
+        if re.search(letters, text):
+            return code
+    return "vi" if re.search("[ăâđêôơưạảấầẩẫậắằẳẵặẹẻẽếềểễệỉịọỏốồổỗộớờởỡợụủứừửữựỳỵỷỹ]", text.lower()) else "en"
+
+
+class AutoLanguage:
+    """For "auto" speech: the English/Chinese streaming model starts at once, and Whisper listens to the sentences it
+    finishes. This says when another language is being spoken, so the captions can move to a reader that knows it."""
+    MIN_PROB = 0.6  # a guess weaker than this counts for nothing
+    SURE_PROB = 0.9  # one sentence this sure is enough; weaker ones must repeat
+
+    def __init__(self):
+        self.sentences = 0
+        self.other = None  # the not English/Chinese language of the last guess, and how often it came in a row
+        self.times = 0
+
+    def due(self):
+        """True when this finished sentence should be checked: all of the first three, then one in four (Whisper costs CPU)."""
+        self.sentences += 1
+        return self.sentences <= 3 or self.sentences % 4 == 0
+
+    def add(self, language, prob):
+        """Feed one guess; returns the language code to move to, or None to stay."""
+        language = "zh" if language in ("yue", "zh") else language
+        if prob < self.MIN_PROB:
+            return None
+        if language in AUTO_LANGS:  # the captions already read it
+            self.other, self.times = None, 0
+            return None
+        self.times = self.times + 1 if language == self.other else 1
+        self.other = language
+        return language if prob >= self.SURE_PROB or self.times >= 2 else None
 
 
 class Stream:

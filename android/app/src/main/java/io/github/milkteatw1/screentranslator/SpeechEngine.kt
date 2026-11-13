@@ -62,6 +62,14 @@ class SpeechEngine(
     private val threads = (Runtime.getRuntime().availableProcessors() - 1).coerceIn(2, 4)
     @Volatile private var whisper: WhisperModel? = null
     private var streamer: StreamRecognizer? = null
+    @Volatile private var spokenNow = language  // the language in use: "auto" while Auto streams or reads with Whisper, else a code
+    // "auto" streaming: Whisper hears the language of finished sentences (AutoLanguage decides), on its own thread
+    private val detecting = Executors.newSingleThreadExecutor()
+    private val watch = AutoLanguage()
+    private val sentenceAudio = ArrayList<FloatArray>()  // the audio of the sentence being spoken, for that check
+    @Volatile private var watching = false
+    @Volatile private var detectBusy = false
+    @Volatile private var pendingMove: String? = null
     @Volatile private var streamShown = ""  // the live words of the sentence being spoken (streaming)
 
     /** [testFile]: a 16 kHz mono 16-bit WAV to feed instead of live audio (used to check the pipeline). */
@@ -76,6 +84,7 @@ class SpeechEngine(
     fun stop() {
         running = false
         cancelled = true
+        detecting.shutdownNow()
         worker.shutdownNow()  // drop the sentences still waiting: they belong to what was said before the stop
     }
 
@@ -84,6 +93,7 @@ class SpeechEngine(
             onStatus("Loading speech model...")
             if (streaming != null) {
                 streamer = StreamRecognizer(context, streaming, 2)
+                watching = language == "auto"
             } else {
                 whisper = WhisperModel.load(context, model) ?: throw IllegalStateException("speech model missing")
             }
@@ -95,7 +105,7 @@ class SpeechEngine(
             val shorts = ShortArray(CHUNK)
             val wav = testFile?.let { File(it).readBytes().drop(44).toByteArray() }
             var wavPos = 0
-            val seg = Segmenter(RATE)
+            var seg = Segmenter(RATE)
             var heardAt = SystemClock.uptimeMillis()  // last time the sound was not pure silence
             var warned = false
             var listening = true
@@ -125,6 +135,12 @@ class SpeechEngine(
                     warned = true
                     onStatus("🔇 " + context.getString(if (kind == AudioKind.SYSTEM) R.string.speech_silent_phone else R.string.speech_silent_mic))
                 }
+                pendingMove?.let { code ->
+                    pendingMove = null
+                    seg = Segmenter(RATE)
+                    switchTo(code)
+                    listening = false
+                }
                 if (streamer != null) { streamStep(streamer!!, chunk); continue }
                 val done = seg.feed(chunk)
                 if (done != null) {
@@ -147,6 +163,7 @@ class SpeechEngine(
                 translating.awaitTermination(30, TimeUnit.SECONDS)
                 whisper?.close()
                 streamer?.close()
+                detecting.shutdown()
                 synchronized(translators) { translators.values.forEach { it.close() } }
             }.start()
             if (testFile == null && !cancelled) onPartial("", "")
@@ -165,7 +182,14 @@ class SpeechEngine(
             return
         }
         if (cancelled) return
-        val code = StreamingModel.guessLanguage(text, language)
+        if (watching) {
+            if (sentenceAudio.size < 300) sentenceAudio.add(chunk)  // 30 s is more than enough to hear the language
+            if (ended) {
+                if (sentenceAudio.size >= 12 && watch.due()) submitDetect(joined(sentenceAudio))
+                sentenceAudio.clear()
+            }
+        }
+        val code = StreamingModel.guessLanguage(text, spokenNow)
         if (code == "zh" && target.traditional && text.isNotEmpty()) text = hansHant?.transliterate(text) ?: text  // the model writes simplified characters
         if (ended) {
             val ending = sentence
@@ -186,6 +210,71 @@ class SpeechEngine(
             streamShown = text
             onPartial(text, "")  // the words only: the sentence is translated once, when it ends
         }
+    }
+
+    private fun joined(parts: List<FloatArray>): FloatArray {
+        val out = FloatArray(parts.sumOf { it.size })
+        var at = 0
+        for (p in parts) { p.copyInto(out, at); at += p.size }
+        return out
+    }
+
+    /** The Whisper model, loaded on first use; null when it is not downloaded (Auto then simply stays on the fast captions). */
+    @Synchronized
+    private fun whisperModel(): WhisperModel? {
+        whisper?.let { return it }
+        if (!WhisperModel.isInstalled(context, model)) return null
+        return WhisperModel.load(context, model)?.also { whisper = it }
+    }
+
+    /** "auto": Whisper hears which language the finished sentence [audio] was in; a clear language the captions cannot read moves them on. */
+    private fun submitDetect(audio: FloatArray) {
+        if (detectBusy || cancelled) return
+        detectBusy = true
+        try {
+            detecting.execute {
+                try {
+                    val whisperNow = whisperModel()
+                    if (whisperNow == null) { watching = false; return@execute }  // no Whisper model: stay on the fast captions
+                    val (lang, prob) = whisperNow.detect(normalize(audio), 2) ?: return@execute
+                    Log.i(TAG, "auto speech: heard $lang ($prob)")
+                    val move = watch.add(lang, prob)
+                    if (move != null && !cancelled) { watching = false; pendingMove = move }
+                } catch (e: Throwable) {
+                    Log.w(TAG, "language check failed: ${e.message}")
+                    watching = false
+                } finally {
+                    detectBusy = false
+                }
+            }
+        } catch (e: java.util.concurrent.RejectedExecutionException) {
+            detectBusy = false
+        }
+    }
+
+    /** Auto heard a language the fast captions cannot read: continue with that language's own fast model if it is downloaded, else with Whisper. */
+    private fun switchTo(code: String) {
+        val reader = StreamingModel.readerFor(code) { StreamingModel.isInstalled(context, it) }
+        streamer?.close()
+        streamer = null
+        sentenceAudio.clear()
+        streamShown = ""
+        sentence++
+        if (reader != null) {
+            try {
+                streamer = StreamRecognizer(context, reader, 2)
+                spokenNow = code
+            } catch (e: Throwable) {
+                Log.w(TAG, "could not start the $code model: ${e.message}")
+            }
+        }
+        if (streamer == null) {
+            spokenNow = "auto"  // Whisper detects the language of every sentence
+            if (whisperModel() == null) throw IllegalStateException("speech model missing")
+        }
+        val name = Langs.spoken.firstOrNull { it.code == code }?.label ?: code
+        onStatus("🌐 " + context.getString(R.string.speech_moved, name))
+        onPartial("", "")
     }
 
     /** A finished sentence: transcribed again in full, and it replaces the live line. */
@@ -213,7 +302,7 @@ class SpeechEngine(
         worker.execute {
             try {
                 val t0 = SystemClock.uptimeMillis()
-                val heard = whisper?.transcribe(normalize(audio), threads, language)
+                val heard = whisper?.transcribe(normalize(audio), threads, spokenNow)
                 Log.i(TAG, "speech line: ${"%.1f".format(seconds)} s of audio read again in ${SystemClock.uptimeMillis() - t0} ms")
                 if (heard != null) {
                     val (code, text) = heard
@@ -235,7 +324,7 @@ class SpeechEngine(
         val forSentence = sentence
         worker.execute {
             try {
-                val heard = whisper?.transcribe(normalize(audio), threads, language)
+                val heard = whisper?.transcribe(normalize(audio), threads, spokenNow)
                 if (heard != null && !cancelled && forSentence == sentence && !stumble(heard.second)) {
                     val (code, text) = heard
                     lastLive = text to forSentence

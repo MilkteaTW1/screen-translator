@@ -245,7 +245,7 @@ def test_english_words_inside_chinese_speech_are_translated_alone():
 
 def test_streaming_models_are_chosen_by_the_spoken_language():
     from screen_translator import streaming
-    assert streaming.key_for("auto") is None and streaming.key_for("zh") == "zh-en"
+    assert streaming.key_for("auto") == "multi" and streaming.key_for("zh") == "zh-en"
     assert streaming.key_for("en") == "en" and streaming.key_for("ko") == "ko" and streaming.key_for("ja") == "multi"
     assert streaming.key_for("fr") is None  # only Whisper reads it
 
@@ -256,6 +256,8 @@ def test_streaming_text_is_written_like_a_sentence_and_the_language_guessed():
     assert streaming.tidy("你好 WORLD") == "你好 world"  # the English in it is not shouted
     assert streaming.guess_language("你好嗎", "auto") == "zh" and streaming.guess_language("hello", "auto") == "en"
     assert streaming.guess_language("hello", "ja") == "ja"
+    assert streaming.guess_language("こんにちは", "auto") == "ja" and streaming.guess_language("привет", "auto") == "ru"
+    assert streaming.guess_language("xin chào bạn", "auto") == "vi" and streaming.guess_language("สวัสดี", "auto") == "th"
 
 
 def test_fast_captions_show_words_at_once_and_end_with_a_translated_line(monkeypatch):
@@ -288,17 +290,44 @@ def test_fast_captions_show_words_at_once_and_end_with_a_translated_line(monkeyp
     assert seen[-1] == ("final", "Hello there my friend", "譯:Hello there my friend")
 
 
-def test_auto_language_uses_whisper_even_in_fast_mode_so_every_language_is_heard(monkeypatch):
+def test_auto_starts_on_the_fast_captions_and_moves_to_whisper_when_another_language_is_heard(monkeypatch):
     from screen_translator import streaming
     w, _seen = worker(monkeypatch)
     monkeypatch.setattr(streaming, "find", lambda key: "folder")  # every streaming model is downloaded
     w.settings["speech_fast"] = True
     w.settings["speech_lang"] = "auto"
-    assert w.stream_key() is None  # the English/Chinese model would turn Japanese or French into nonsense
-    w.settings["speech_lang"] = "ja"
+    assert w.stream_key() == "multi"  # words at once, in eight languages
+    monkeypatch.setattr(streaming, "find", lambda key: "folder" if key == "zh-en" else None)  # only the older model is there
+    assert w.stream_key() == "zh-en"
+    monkeypatch.setattr(streaming, "find", lambda key: "folder")
+    w.lang_now = "whisper"  # what _move_to sets when French is heard: no streaming model for it
+    assert w.stream_key() is None
+    w.lang_now = "ja"
     assert w.stream_key() == "multi"
+    w.lang_now = None
     w.settings["speech_lang"] = "fr"
     assert w.stream_key() is None  # no streaming model for French: Whisper
     w.settings["speech_fast"] = False
     w.settings["speech_lang"] = "en"
     assert w.stream_key() is None  # fast mode off
+
+
+def test_auto_language_watch_moves_on_only_for_a_clear_other_language():
+    from screen_translator.streaming import AutoLanguage
+    w = AutoLanguage()
+    assert w.add("en", 0.99) is None and w.add("zh", 0.9) is None and w.add("yue", 0.9) is None
+    assert w.add("ja", 0.99) is None and w.add("ru", 0.99) is None  # the auto model reads them already
+    assert w.add("fr", 0.4) is None  # too unsure
+    assert w.add("fr", 0.7) is None  # once and not sure: wait
+    assert w.add("fr", 0.7) == "fr"  # twice in a row
+    w = AutoLanguage()
+    assert w.add("ko", 0.95) == "ko"  # once but very sure
+    w = AutoLanguage()
+    assert w.add("fr", 0.7) is None and w.add("en", 0.9) is None and w.add("fr", 0.7) is None  # English in between: start over
+
+
+def test_auto_language_watch_checks_the_first_sentences_then_one_in_four():
+    from screen_translator.streaming import AutoLanguage
+    w = AutoLanguage()
+    due = [w.due() for _ in range(12)]
+    assert due[:3] == [True, True, True] and due[3:8] == [True, False, False, False, True] and sum(due) == 6

@@ -84,6 +84,17 @@ class WhisperModel private constructor(private var handle: Long) {
         return if (text.isEmpty()) null else raw.substring(0, tab) to text
     }
 
+    /** (language code, probability 0..1) of the language spoken in 16 kHz mono audio, or null when it could not tell. */
+    @Synchronized
+    fun detect(audio: FloatArray, threads: Int): Pair<String, Float>? {
+        if (handle == 0L) return null
+        val raw = String(nativeDetect(handle, audio, threads), Charsets.UTF_8)
+        val tab = raw.indexOf('	')
+        if (tab <= 0) return null
+        val prob = raw.substring(tab + 1).trim().toFloatOrNull() ?: return null
+        return raw.substring(0, tab) to prob
+    }
+
     @Synchronized
     fun close() {
         if (handle != 0L) nativeFree(handle)
@@ -91,6 +102,7 @@ class WhisperModel private constructor(private var handle: Long) {
     }
 
     private external fun nativeLoad(path: String): Long
+    private external fun nativeDetect(handle: Long, audio: FloatArray, threads: Int): ByteArray
     private external fun nativeFree(handle: Long)
     private external fun nativeTranscribe(handle: Long, audio: FloatArray, threads: Int, language: String): ByteArray
 }

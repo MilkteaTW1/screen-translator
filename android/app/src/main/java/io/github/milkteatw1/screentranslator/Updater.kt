@@ -23,33 +23,49 @@ object Updater {
         context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "0"
 
     /** Newer release that has an APK for this phone, or null when this is the newest. Throws when GitHub cannot be reached. */
-    fun check(current: String, abis: List<String> = Build.SUPPORTED_ABIS.toList()): Update? {
+    fun check(current: String, abis: List<String> = Build.SUPPORTED_ABIS.toList()): Update? =
+        find(fetch(), current, abis)
+
+    /** The recent releases that have an APK for this phone, newest first (to pick an older version). Throws when GitHub cannot be reached. */
+    fun releases(abis: List<String> = Build.SUPPORTED_ABIS.toList()): List<Update> = releases(fetch(), abis)
+
+    private fun fetch(): String {
         val conn = URL(RELEASES).openConnection() as HttpURLConnection
         conn.connectTimeout = 10_000
         conn.readTimeout = 10_000
         conn.setRequestProperty("Accept", "application/vnd.github+json")
         conn.setRequestProperty("User-Agent", "ScreenTranslator")
-        return conn.inputStream.use { find(it.readBytes().toString(Charsets.UTF_8), current, abis) }
+        return conn.inputStream.use { it.readBytes().toString(Charsets.UTF_8) }
+    }
+
+    /** The APK of release [r] that fits one of [tags] (or the single APK for every phone); null when it has none. */
+    private fun apkOf(r: org.json.JSONObject, tags: List<String>): org.json.JSONObject? {
+        val assets = r.getJSONArray("assets")
+        val found = (0 until assets.length()).map { assets.getJSONObject(it) }
+            .mapNotNull { a -> APK.find(a.getString("name"))?.let { m -> m.groupValues[1] to a } }
+        return tags.firstNotNullOfOrNull { tag -> found.firstOrNull { it.first == tag }?.second } ?: found.firstOrNull { it.first.isEmpty() }?.second
+    }
+
+    private fun abiTags(abis: List<String>) = abis.mapNotNull { mapOf("arm64-v8a" to "arm64", "x86_64" to "x86_64")[it] }
+
+    /** Every non-pre-release, non-draft release with an APK for one of [abis], newest first. A release without an APK is skipped. */
+    internal fun releases(json: String, abis: List<String>): List<Update> {
+        val all = JSONArray(json)
+        val tags = abiTags(abis)
+        val out = ArrayList<Update>()
+        for (i in 0 until all.length()) {
+            val r = all.getJSONObject(i)
+            if (r.optBoolean("prerelease") || r.optBoolean("draft")) continue
+            val pick = apkOf(r, tags) ?: continue
+            out.add(Update(r.getString("tag_name").removePrefix("v"), pick.getString("browser_download_url"), pick.optLong("size")))
+        }
+        return out.sortedWith { a, b -> if (newer(a.version, b.version)) -1 else if (newer(b.version, a.version)) 1 else 0 }
     }
 
     /** Picks the newest non-pre-release whose assets include an APK for one of [abis] and which is newer than [current].
      *  A release without an APK (a Windows-only one) is skipped, so it never hides an older release that has one. */
     internal fun find(json: String, current: String, abis: List<String>): Update? {
-        val releases = JSONArray(json)
-        val tags = abis.mapNotNull { mapOf("arm64-v8a" to "arm64", "x86_64" to "x86_64")[it] }
-        var best: Update? = null
-        for (i in 0 until releases.length()) {
-            val r = releases.getJSONObject(i)
-            if (r.optBoolean("prerelease") || r.optBoolean("draft")) continue
-            val version = r.getString("tag_name").removePrefix("v")
-            if (!newer(version, current) || (best != null && !newer(version, best.version))) continue
-            val assets = r.getJSONArray("assets")
-            val found = (0 until assets.length()).map { assets.getJSONObject(it) }
-                .mapNotNull { a -> APK.find(a.getString("name"))?.let { m -> m.groupValues[1] to a } }
-            val pick = tags.firstNotNullOfOrNull { tag -> found.firstOrNull { it.first == tag }?.second } ?: found.firstOrNull { it.first.isEmpty() }?.second ?: continue
-            best = Update(version, pick.getString("browser_download_url"), pick.optLong("size"))
-        }
-        return best
+        return releases(json, abis).firstOrNull { newer(it.version, current) }
     }
 
     internal fun newer(a: String, b: String): Boolean {

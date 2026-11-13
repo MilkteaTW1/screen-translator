@@ -435,7 +435,7 @@ class CaptureService : Service() {
             },
             onStatus = { message ->
                 Log.i(TAG, message)
-                if (message.isNotEmpty() && message.first() in "⚠🔇") overlay?.partial = message to ""  // the user must see these
+                if (message.isNotEmpty() && message.first() in "⚠🔇🌐") overlay?.partial = message to ""  // the user must see these
             },
         )
         speech = engine

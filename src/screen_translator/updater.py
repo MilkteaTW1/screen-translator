@@ -8,6 +8,7 @@ import urllib.request
 from . import __version__, plat
 
 API_URL = "https://api.github.com/repos/MilkteaTW1/screen-translator/releases/latest"
+LIST_URL = "https://api.github.com/repos/MilkteaTW1/screen-translator/releases?per_page=15"
 INSTALLER_RE = plat.INSTALLER_RE
 
 
@@ -29,6 +30,26 @@ def check(current=__version__):
         return (version, asset["browser_download_url"], release.get("body") or "") if asset else None
     except Exception:
         return None
+
+
+def releases():
+    """[(version, installer_url)] of the recent releases that have an installer for this system, newest first; the
+    user may pick any of them (the first is what an update takes). [] when offline."""
+    try:
+        req = urllib.request.Request(LIST_URL, headers={"Accept": "application/vnd.github+json",
+                                                        "User-Agent": "ScreenTranslator"})
+        with urllib.request.urlopen(req, timeout=10) as r:
+            found = json.load(r)
+        out = []
+        for release in found:
+            if release.get("prerelease") or release.get("draft"):
+                continue
+            asset = next((a for a in release.get("assets", []) if INSTALLER_RE.match(a["name"])), None)
+            if asset:
+                out.append((release["tag_name"].lstrip("v"), asset["browser_download_url"]))
+        return sorted(out, key=lambda v: _version_tuple(v[0]), reverse=True)
+    except Exception:
+        return []
 
 
 def download(url, progress=None):

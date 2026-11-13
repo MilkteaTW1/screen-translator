@@ -1,6 +1,7 @@
 // The small bridge between Kotlin (WhisperModel) and whisper.cpp.
 #include <jni.h>
 #include <string>
+#include <vector>
 #include <android/log.h>
 #include "whisper.h"
 
@@ -67,6 +68,29 @@ Java_io_github_milkteatw1_screentranslator_WhisperModel_nativeTranscribe(
     int id = whisper_full_lang_id(ctx);
     const char *code = id >= 0 ? whisper_lang_str(id) : "";
     std::string out = std::string(code ? code : "") + "\t" + text;
+    jbyteArray bytes = env->NewByteArray((jsize) out.size());
+    env->SetByteArrayRegion(bytes, 0, (jsize) out.size(), reinterpret_cast<const jbyte *>(out.data()));
+    return bytes;
+}
+
+// Which language is spoken in 16 kHz mono float audio (at most the first 30 s are looked at). Returns the UTF-8 bytes of
+// "<language code>\t<probability>", empty when it failed.
+extern "C" JNIEXPORT jbyteArray JNICALL
+Java_io_github_milkteatw1_screentranslator_WhisperModel_nativeDetect(
+        JNIEnv *env, jobject, jlong handle, jfloatArray audio, jint threads) {
+    auto *ctx = reinterpret_cast<whisper_context *>(handle);
+    if (!ctx) return env->NewByteArray(0);
+    jsize n = env->GetArrayLength(audio);
+    if (n > 16000 * 30) n = 16000 * 30;
+    jfloat *samples = env->GetFloatArrayElements(audio, nullptr);
+    int rc = whisper_pcm_to_mel(ctx, samples, n, threads);
+    env->ReleaseFloatArrayElements(audio, samples, JNI_ABORT);
+    if (rc != 0) return env->NewByteArray(0);
+    std::vector<float> probs(whisper_lang_max_id() + 1, 0.0f);
+    int id = whisper_lang_auto_detect(ctx, 0, threads, probs.data());
+    if (id < 0 || id >= (int) probs.size()) return env->NewByteArray(0);
+    const char *code = whisper_lang_str(id);
+    std::string out = std::string(code ? code : "") + "\t" + std::to_string(probs[id]);
     jbyteArray bytes = env->NewByteArray((jsize) out.size());
     env->SetByteArrayRegion(bytes, 0, (jsize) out.size(), reinterpret_cast<const jbyte *>(out.data()));
     return bytes;
