@@ -105,6 +105,12 @@ class Prefs(context: Context) {
         get() = sp.getLong("lastUpdateCheck", 0)
         set(v) = sp.edit().putLong("lastUpdateCheck", v).apply()
 
+    /** Fast captions (the words while they are spoken) where a streaming model reads the spoken language; false: Whisper, a sentence at a time. */
+    var speechFast: Boolean
+        get() = sp.getBoolean("speechFast", true)
+        set(v) = sp.edit().putBoolean("speechFast", v).apply()
+    /** The streaming model that will be used now, or null (Whisper: fast captions off, "Auto", or a language without one). */
+    val streamingModel get() = StreamingModel.useFor(speechFast, spokenLanguage)
     val whisperModel get() = WhisperModel.spec(speechModel)
     val sourceLang get() = Langs.sources[source]
     val targetLang get() = Langs.targets[target]
