@@ -41,13 +41,17 @@ object StreamingModel {
             listOf("ja", "ru", "th", "vi", "ar", "id")),
     )
 
+    /** What the "auto" streaming model reads: English, Chinese and the eight-language model's languages. Anything else is Whisper's. */
+    val AUTO_LANGS: Set<String> = setOf("en", "zh") + models.first { it.key == "multi" }.langs
+
     /**
-     * The streaming model that reads [language] (a code), or null when only Whisper can: "auto" always goes to
-     * Whisper, because each streaming model hears only a few languages (the desktop does the same). English has its
-     * own small model; Chinese uses the bilingual one.
+     * The streaming model that reads [language] (a code), or null when only Whisper can. "auto" starts on the
+     * eight-language model (words at once, whichever of its languages is spoken); [AutoLanguage] moves it to another
+     * reader when a language outside those is heard. English has its own small model; Chinese uses the bilingual one.
      */
     fun specFor(language: String): Spec? {
-        if (language == "auto" || language.isBlank()) return null
+        if (language.isBlank()) return null
+        if (language == "auto") return models.first { it.key == "multi" }
         val code = language.lowercase()
         if (code == "en") return models.first { it.key == "en" }
         if (code == "zh") return models.first { it.key == "zh-en" }
@@ -55,7 +59,17 @@ object StreamingModel {
     }
 
     /** Fast captions are used when the user chose them and a streaming model reads the spoken language. */
-    fun useFor(fast: Boolean, language: String): Spec? = if (fast) specFor(language) else null
+    fun useFor(fast: Boolean, language: String, installed: (Spec) -> Boolean = { false }): Spec? =
+        if (fast) usable(language, installed) else null
+
+    /** [specFor], but "auto" takes a model that is already downloaded (the English/Chinese one too) before asking for the big one. */
+    fun usable(language: String, installed: (Spec) -> Boolean): Spec? {
+        if (language != "auto") return specFor(language)
+        return listOf("multi", "zh-en").map { key -> models.first { it.key == key } }.firstOrNull(installed) ?: specFor("auto")
+    }
+
+    /** Where captions go when [AutoLanguage] hears [code]: that language's own streaming model if it is downloaded, else null (Whisper). */
+    fun readerFor(code: String, installed: (Spec) -> Boolean): Spec? = specFor(code)?.takeIf(installed)
 
     fun folder(context: Context, spec: Spec) = File(context.filesDir, "stream/${spec.key}")
 
@@ -79,10 +93,21 @@ object StreamingModel {
         return t
     }
 
-    /** The language code of what was recognised: the chosen one, or (should "auto" ever be used) Chinese when it has Chinese letters. */
+    private val SCRIPTS = listOf(
+        "ja" to Regex("[぀-ヿ]"), "zh" to Regex("[㐀-鿿]"), "th" to Regex("[฀-๿]"),
+        "ru" to Regex("[Ѐ-ӿ]"), "ar" to Regex("[؀-ۿ]"),
+    )
+    private val VIETNAMESE = Regex("[ăâđêôơưạảấầẩẫậắằẳẵặẹẻẽếềểễệỉịọỏốồổỗộớờởỡợụủứừửữựỳỵỷỹ]")
+
+    /**
+     * The language code of what was recognised: the chosen one, or for "auto" read from the letters (kana: Japanese,
+     * Han: Chinese, then Thai, Cyrillic, Arabic; Latin letters are English, or Vietnamese when they carry its marks;
+     * Indonesian is only known when it is chosen).
+     */
     fun guessLanguage(text: String, spoken: String): String {
         if (spoken != "auto") return spoken
-        return if (text.any { it in '㐀'..'鿿' }) "zh" else "en"
+        for ((code, letters) in SCRIPTS) if (letters.containsMatchIn(text)) return code
+        return if (VIETNAMESE.containsMatchIn(text.lowercase())) "vi" else "en"
     }
 
     /** Downloads what [spec] is missing. [done] gets null on success or the error. Runs on its own thread. */

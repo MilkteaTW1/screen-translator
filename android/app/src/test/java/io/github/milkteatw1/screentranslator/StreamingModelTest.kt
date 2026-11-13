@@ -9,9 +9,26 @@ import java.io.File
 
 class StreamingModelTest {
     @Test
-    fun autoAlwaysStaysWithWhisper() {
-        assertNull(StreamingModel.specFor("auto"))
-        assertNull(StreamingModel.useFor(true, "auto"))
+    fun autoStartsOnTheEightLanguageModel() {
+        assertEquals("multi", StreamingModel.specFor("auto")!!.key)
+        assertEquals("multi", StreamingModel.useFor(true, "auto")!!.key)
+        assertNull(StreamingModel.useFor(false, "auto"))
+    }
+
+    @Test
+    fun autoTakesADownloadedModelBeforeAskingForTheBigOne() {
+        val zhEn = StreamingModel.models.first { it.key == "zh-en" }
+        assertEquals("zh-en", StreamingModel.usable("auto") { it.key == "zh-en" }!!.key)
+        assertEquals("multi", StreamingModel.usable("auto") { true }!!.key)  // both there: the eight-language one
+        assertEquals("multi", StreamingModel.usable("auto") { false }!!.key)  // none: that one has to be downloaded
+        assertEquals("en", StreamingModel.usable("en") { it == zhEn }!!.key)  // a chosen language ignores what is there
+    }
+
+    @Test
+    fun autoMovesToALanguagesOwnModelOnlyWhenItIsDownloaded() {
+        assertEquals("ko", StreamingModel.readerFor("ko") { true }!!.key)
+        assertNull(StreamingModel.readerFor("ko") { false })  // Whisper then
+        assertNull(StreamingModel.readerFor("fr") { true })  // no streaming model for French
     }
 
     @Test
@@ -77,5 +94,10 @@ class StreamingModelTest {
         assertEquals("ja", StreamingModel.guessLanguage("こんにちは", "ja"))
         assertEquals("zh", StreamingModel.guessLanguage("你好", "auto"))
         assertEquals("en", StreamingModel.guessLanguage("hello", "auto"))
+        assertEquals("ja", StreamingModel.guessLanguage("今日はいい天気です", "auto"))  // kana wins over Han
+        assertEquals("th", StreamingModel.guessLanguage("สวัสดีครับ", "auto"))
+        assertEquals("ru", StreamingModel.guessLanguage("привет мир", "auto"))
+        assertEquals("ar", StreamingModel.guessLanguage("مرحبا", "auto"))
+        assertEquals("vi", StreamingModel.guessLanguage("Xin chào các bạn", "auto"))
     }
 }

@@ -81,6 +81,12 @@
     <string name="lang_en">English</string>
     <string name="start_translating">Start translating</string>
     <string name="version">Version %1$s</string>
+    <string name="choose_version">Choose a version…</string>
+    <string name="choose_version_title">Choose a version</string>
+    <string name="version_newest">(newest)</string>
+    <string name="version_installed">(installed)</string>
+    <string name="no_versions">No downloadable versions found</string>
+    <string name="downgrade_note">This is older than the installed version. Android may refuse to install it over the newer one; if so, uninstall the app first (your settings are lost).</string>
     <string name="check_updates_short">Check for updates</string>
     <string name="lang_short">EN</string>
     <string name="screen_start">Translate the screen</string>
@@ -98,10 +104,11 @@
     <string name="speech_silent_phone">No sound from the phone. Is something playing? Some apps do not allow their sound to be recorded.</string>
     <string name="speech_silent_mic">No sound from the microphone.</string>
     <string name="auto_detect">Detect automatically</string>
+    <string name="speech_moved">Heard %1$s: switched reader</string>
     <string name="speech_engine_label">Captions</string>
     <string name="engine_fast">Fast: words appear while they are spoken</string>
     <string name="engine_accurate">Accurate: a whole sentence at a time</string>
-    <string name="speech_engine_note">Fast needs a small extra model (English 72 MB, Chinese 200 MB, Korean 132 MB, Japanese, Vietnamese, Indonesian, Russian, Thai, Arabic 340 MB). With "Detect automatically", and for other languages, the accurate way is used.</string>
+    <string name="speech_engine_note">Fast needs a small extra model (English 72 MB, Chinese 200 MB, Korean 132 MB, Japanese, Vietnamese, Indonesian, Russian, Thai, Arabic 340 MB). "Detect automatically" starts fast on English, Chinese, Japanese, Russian, Thai, Arabic and Vietnamese, and switches to the accurate way when it hears another language (if the accurate model is downloaded).</string>
     <string name="stream_model_title">Download fast speech model?</string>
     <string name="stream_model_text">Fast captions need a speech model for this language (about %1$d MB, downloaded once). How do you want to download?</string>
     <string name="speech_model_label">Speech model</string>
