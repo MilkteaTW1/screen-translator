@@ -222,7 +222,7 @@ def test_streaming_text_is_put_in_sentence_case():
 
 def test_streaming_model_for_each_language():
     assert streaming.key_for("en") == "en"
-    assert streaming.key_for("auto") == "zh-en" and streaming.key_for("zh") == "zh-en"
+    assert streaming.key_for("auto") is None and streaming.key_for("zh") == "zh-en"
     assert streaming.key_for("ko") == "ko" and streaming.key_for("ja") == "multi"
     assert streaming.key_for("fr") is None  # only Whisper reads it
 
@@ -253,3 +253,31 @@ def test_the_build_puts_back_vendored_dlls_pyinstaller_left_out(tmp_path, monkey
     monkeypatch.setattr(mod.sysconfig, "get_paths", lambda: {"purelib": str(site)})
     assert mod.copy_missing(app) == ["sentencepiece.libs/msvcp140-abc.dll"]
     assert not (app / "_internal" / "unused.libs").exists()  # a package that is not in the build is left alone
+
+
+# --- testing a key or server when it is entered -----------------------------------------------------------------
+
+def test_check_server_reports_what_came_back_or_why_not(monkeypatch):
+    gem = {"server_kind": "gemini", "server_key": "k"}
+    assert t.check_server({}) == (None, "")  # nothing set up: nothing to test
+    assert t.check_server({"server_kind": "gemini", "server_key": " "}) == (None, "")
+    monkeypatch.setattr(t, "server_translate_group", lambda cfg, texts, src, dst: [" 你好,世界 "])
+    assert t.check_server(gem) == (True, "你好,世界")
+
+    def refused(*a):
+        raise OSError("HTTP 400 API key not valid.\nPlease pass a valid API key.")
+    monkeypatch.setattr(t, "server_translate_group", refused)
+    ok, why = t.check_server(gem)
+    assert ok is False and why == "HTTP 400 API key not valid. Please pass a valid API key."
+    monkeypatch.setattr(t, "server_translate_group", lambda *a: None)
+    assert t.check_server(gem)[0] is False  # not one line back
+    monkeypatch.setattr(t, "server_translate_group", lambda *a: ["  "])
+    assert t.check_server(gem)[0] is False  # an empty answer is not a working key
+
+
+def test_the_test_uses_a_different_target_when_the_target_is_english(monkeypatch):
+    seen = []
+    monkeypatch.setattr(t, "server_translate_group", lambda cfg, texts, src, dst: seen.append(dst) or ["ok"])
+    t.check_server({"server_kind": "deepl", "server_key": "k"}, "en")
+    t.check_server({"server_kind": "deepl", "server_key": "k"}, "zh-TW")
+    assert seen == ["fr", "zh-TW"]

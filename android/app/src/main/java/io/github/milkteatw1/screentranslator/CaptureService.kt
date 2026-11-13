@@ -60,7 +60,7 @@ class CaptureService : Service() {
         private const val TRANSLATE_THREADS = 6
         private const val BATCH = 8  // blocks per translation request
         private const val MAX_REREADS = 4
-        private const val MAX_CAPTIONS = 4
+        private const val MAX_CAPTIONS = 8  // kept; how many are drawn is the user's choice (CaptionLook.lines)
         const val CAPTION_LIFETIME_MS = 25_000L  // how long a caption stays up (the same as on Windows) when nothing new is said
         private const val COVER_SETTLE_MS = 400L
         private const val MOVING_SCAN_MS = 350L
@@ -294,6 +294,7 @@ class CaptureService : Service() {
         val view = OverlayView(this)
         view.region = prefs.region
         overlay = view
+        view.captionLook = { CaptionLook.from(prefs) }
         val lp = WindowManager.LayoutParams(
             WindowManager.LayoutParams.MATCH_PARENT, WindowManager.LayoutParams.MATCH_PARENT,
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,

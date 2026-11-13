@@ -18,20 +18,20 @@ from PySide6.QtGui import QAction, QDesktopServices, QIcon
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QFileDialog, QComboBox, QDoubleSpinBox, QFormLayout, QGroupBox, QHBoxLayout, QLabel,
-    QLineEdit, QMenu, QMessageBox, QPlainTextEdit, QPushButton, QSystemTrayIcon, QTabWidget, QVBoxLayout, QWidget,
+    QLineEdit, QMenu, QMessageBox, QPlainTextEdit, QPushButton, QSpinBox, QSystemTrayIcon, QTabWidget, QVBoxLayout, QWidget,
 )
 
 from . import better, gemma, ocr, tracking
-from .overlay import CaptionOverlay, CoverChip, Overlay
+from .overlay import CAPTION_LOOK, CAPTION_RANGES, CaptionOverlay, CoverChip, Overlay, caption_look
 from . import streaming
-from .speech import MODELS, SpeechWorker, download_model, ensure_streams, find_model, import_model
+from .speech import EXTRA_SPOKEN, MODELS, SpeechWorker, download_model, ensure_streams, find_model, import_model
 from . import __version__, i18n, packs, updater
 from .i18n import t
 from .hotkeys import Hotkeys
 from .region import RegionPicker
 from .plat import IS_MAC, IS_WIN, data_dir, hide_from_capture, lower_priority, run_installer, set_autostart
 from .translator import (
-    diagnose, server_from_settings,
+    check_server, diagnose, server_from_settings,
     DiskCache, LANGUAGES, Translator, argos_code, install_pack, looks_like_source, missing_pairs, needed_pairs, ocr_tag_to_code,
 )
 
@@ -44,6 +44,7 @@ DEFAULTS = {
     "autostart": False, "start_on_launch": False,
     "region": None, "hover_mode": False, "cover_all": False, "game_mode": False, "hotkeys": True,
     "speech_enabled": False, "speech_source": "system", "speech_model": "base", "speech_lang": "auto", "speech_fast": True,
+    **CAPTION_LOOK,  # how the speech captions look: width (% of the screen), text size, background, place, lines
     "use_google": True, "offline_engine": "standard",
     "server_kind": "off", "server_url": "", "server_key": "", "server_model": "",
     "ui_language": "",  # interface language; empty = the one Windows is set to
@@ -733,6 +734,7 @@ class Panel(QWidget):
     language_changed = Signal()
     hidden_to_tray = Signal()
     diagnosed = Signal(str)
+    server_tested = Signal(int, object, str)  # which test, worked (None: nothing to test), what came back
     applied = Signal(dict)
 
     def __init__(self, worker, overlay, langs, speech=None, captions=None):
@@ -805,6 +807,16 @@ class Panel(QWidget):
         self.server_key = QLineEdit(s["server_key"])
         self.server_key.setEchoMode(QLineEdit.Password)
         self.server_model = QLineEdit(s["server_model"])
+        self.server_test_label = QLabel()  # "✓ works" in green or "✗ why not" in red, after the key is entered
+        self.server_test_label.setWordWrap(True)
+        self.server_test_button = QPushButton()
+        self._text(self.server_test_button.setText, "server_test_button")
+        self.server_test_button.clicked.connect(self._test_server_now)
+        self._server_test_id = 0
+        self._server_timer = QTimer(self)  # tests a moment after the typing or pasting stops, not at every key
+        self._server_timer.setSingleShot(True)
+        self._server_timer.setInterval(800)
+        self._server_timer.timeout.connect(self._test_server_now)
         self.speech_enabled = self._check("speech_enable", s["speech_enabled"])
         self.speech_fast = QComboBox()  # fast: words while they are spoken; accurate: a whole sentence read by Whisper
         self.speech_fast.addItem("", True)
@@ -819,7 +831,7 @@ class Panel(QWidget):
         self.speech_lang = QComboBox()
         self.speech_lang.addItem("", "auto")
         seen = set()
-        for name, code in sorted(langs.items()):
+        for name, code in sorted({**langs, **{n: c for c, n in EXTRA_SPOKEN.items()}}.items()):
             base = code.split("-")[0]
             if base not in seen:
                 seen.add(base)
@@ -828,6 +840,16 @@ class Panel(QWidget):
         self._select(self.speech_model, s["speech_model"])
         self._select(self.speech_lang, s["speech_lang"])
         self.speech_state = QLabel("")
+        look = caption_look(s)
+        self.caption_width = self._spin("caption_width", look, " %")
+        self.caption_font = self._spin("caption_font", look, " px")
+        self.caption_opacity = self._spin("caption_opacity", look, " %")
+        self.caption_lines = self._spin("caption_lines", look, "")
+        self.caption_position = QComboBox()
+        self.caption_position.addItem("", "bottom")
+        self.caption_position.addItem("", "top")
+        self._select(self.caption_position, look["caption_position"])
+        self.caption_show_said = self._check("caption_show_said", look["caption_show_said"])
         self.glossary = QPlainTextEdit(s["glossary"])
         self.toggle = QPushButton()  # screen translation on/off
         self.toggle.clicked.connect(self.on_toggle)
@@ -866,21 +888,30 @@ class Panel(QWidget):
         self._row(form, "translate_to", self.target)
         self._row(form, "refresh_interval", self.interval)
         lay = QVBoxLayout(translate)
-        lay.addLayout(form)
-        lay.addWidget(self.hide_capture)
-        lay.addWidget(self.skip_names)
-        lay.addWidget(self.disk_cache)
-        lay.addWidget(self.hide_on_scroll)
-        lay.addWidget(self.hover_mode)
-        lay.addWidget(self.game_mode)
-        lay.addWidget(self.cover_all)
-        lay.addWidget(self.hotkeys)
-        lay.addWidget(self.region_label)
+        languages = QGroupBox()
+        self._text(languages.setTitle, "group_languages")
+        box = QVBoxLayout(languages)
+        box.addLayout(form)
+        lay.addWidget(languages)
+        display = QGroupBox()
+        self._text(display.setTitle, "group_display")
+        box = QVBoxLayout(display)
+        box.addWidget(self.cover_all)
+        box.addWidget(self.hover_mode)
+        box.addWidget(self.hide_on_scroll)
+        box.addWidget(self.hide_capture)
+        lay.addWidget(display)
+        region = QGroupBox()
+        self._text(region.setTitle, "group_region")
+        box = QVBoxLayout(region)
+        box.addWidget(self.game_mode)
+        box.addWidget(self.region_label)
         region_row = QHBoxLayout()
         region_row.addWidget(self.region_button)
         region_row.addWidget(self.region_clear)
         region_row.addStretch(1)
-        lay.addLayout(region_row)
+        box.addLayout(region_row)
+        lay.addWidget(region)
         lay.addStretch(1)
         self._tab(translate, "tab_translate")
 
@@ -893,6 +924,22 @@ class Panel(QWidget):
         self._row(speech_form, "speech_language", self.speech_lang)
         self._row(speech_form, "speech_model", self.speech_model)
         lay.addLayout(speech_form)
+        lang_hint = QLabel()
+        lang_hint.setWordWrap(True)
+        self._text(lang_hint.setText, "speech_lang_hint")
+        lay.addWidget(lang_hint)
+        captions_box = QGroupBox()
+        self._text(captions_box.setTitle, "group_captions")
+        box = QVBoxLayout(captions_box)
+        caption_form = QFormLayout()
+        self._row(caption_form, "caption_width", self.caption_width)
+        self._row(caption_form, "caption_font", self.caption_font)
+        self._row(caption_form, "caption_opacity", self.caption_opacity)
+        self._row(caption_form, "caption_lines", self.caption_lines)
+        self._row(caption_form, "caption_position", self.caption_position)
+        box.addLayout(caption_form)
+        box.addWidget(self.caption_show_said)
+        lay.addWidget(captions_box)
         lay.addStretch(1)
         self._tab(speech_tab, "tab_speech")
 
@@ -901,6 +948,7 @@ class Panel(QWidget):
         names = QGroupBox()
         self._text(names.setTitle, "group_names")
         box = QVBoxLayout(names)
+        box.addWidget(self.skip_names)
         box.addWidget(self.auto)
         box.addWidget(self.kata)
         label = QLabel()
@@ -912,21 +960,30 @@ class Panel(QWidget):
         self._text(engine.setTitle, "group_engine")
         box = QVBoxLayout(engine)
         box.addWidget(self.google)
+        box.addWidget(self.disk_cache)
         offline_form = QFormLayout()
         self._row(offline_form, "offline_engine", self.offline_engine)
         box.addLayout(offline_form)
+        lay.addWidget(engine)
+        server = QGroupBox()
+        self._text(server.setTitle, "group_server")
+        box = QVBoxLayout(server)
         server_form = QFormLayout()
         self._row(server_form, "server_kind", self.server_kind)
         self._row(server_form, "server_url", self.server_url)
         self._row(server_form, "server_key", self.server_key)
         self._row(server_form, "server_model", self.server_model)
         box.addLayout(server_form)
+        test_row = QHBoxLayout()
+        test_row.addWidget(self.server_test_button)
+        test_row.addWidget(self.server_test_label, 1)
+        box.addLayout(test_row)
         self.gemini_help = QLabel()  # for the users who do not know where a key comes from: a link and three steps
         self.gemini_help.setOpenExternalLinks(True)
         self.gemini_help.setWordWrap(True)
         self._text(self.gemini_help.setText, "gemini_help")
         box.addWidget(self.gemini_help)
-        lay.addWidget(engine)
+        lay.addWidget(server)
         lay.addStretch(1)
         self._tab(quality, "tab_quality")
 
@@ -941,6 +998,11 @@ class Panel(QWidget):
         self._row(close_form, "close_action", self.close_action)
         box.addLayout(close_form)
         lay.addWidget(startup)
+        shortcuts = QGroupBox()
+        self._text(shortcuts.setTitle, "group_shortcuts")
+        box = QVBoxLayout(shortcuts)
+        box.addWidget(self.hotkeys)
+        lay.addWidget(shortcuts)
         app_box = QGroupBox()
         self._text(app_box.setTitle, "group_app")
         box = QVBoxLayout(app_box)
@@ -993,6 +1055,10 @@ class Panel(QWidget):
         self._show_gemini_help()
         for w in (self.server_url, self.server_key, self.server_model):
             w.editingFinished.connect(self.apply)
+            w.textChanged.connect(self._server_changed)
+        self.server_kind.currentIndexChanged.connect(self._server_changed)
+        self.target.currentIndexChanged.connect(self._server_changed)
+        self.server_tested.connect(self._show_server_test)
         self.autostart.toggled.connect(self.apply)
         self.start_on_launch.toggled.connect(self.apply)
         worker.status.connect(self.state.setText)
@@ -1007,6 +1073,10 @@ class Panel(QWidget):
         self.speech_lang.currentIndexChanged.connect(self.apply)
         self.speech_lang.currentIndexChanged.connect(self._restart_speech)
         self.speech_fast.currentIndexChanged.connect(self.apply)
+        for w in (self.caption_width, self.caption_font, self.caption_opacity, self.caption_lines):
+            w.valueChanged.connect(self._caption_changed)
+        self.caption_position.currentIndexChanged.connect(self._caption_changed)
+        self.caption_show_said.toggled.connect(self._caption_changed)
         self.speech_fast.currentIndexChanged.connect(self._restart_speech)
         self.speech_model_done.connect(self._speech_model_done)
         if speech is not None:
@@ -1031,6 +1101,61 @@ class Panel(QWidget):
         box.setChecked(checked)
         self._text(box.setText, key)
         return box
+
+    def _server_changed(self, *_):
+        """The key, address or kind changed (typed, pasted or picked): test it once typing has stopped."""
+        self._server_test_id += 1  # an answer still on its way belongs to the old text
+        if self.server_kind.currentData() == "off":
+            self._server_timer.stop()
+            self.server_test_label.setText("")
+        else:
+            self._server_timer.start()
+            self.server_test_label.setStyleSheet("")
+            self.server_test_label.setText("")
+
+    def _test_server_now(self):
+        """One real request with what is entered; the answer shows as a green tick or a red cross."""
+        self._server_timer.stop()
+        settings = self.current()
+        if not server_from_settings(settings):
+            self.server_test_label.setStyleSheet("")
+            self.server_test_label.setText(t("server_test_need") if settings["server_kind"] != "off" else "")
+            return
+        self._server_test_id += 1
+        mine = self._server_test_id
+        self.server_test_label.setStyleSheet("")
+        self.server_test_label.setText(t("server_testing"))
+
+        def work():
+            try:
+                ok, text = check_server(settings, settings["target"])
+                self.server_tested.emit(mine, ok, text)
+            except RuntimeError:
+                pass  # the window was closed while the test was running
+        threading.Thread(target=work, daemon=True).start()
+
+    def _show_server_test(self, test_id, ok, text):
+        if test_id != self._server_test_id or ok is None:
+            return
+        if ok:
+            self.server_test_label.setStyleSheet("color: #2e9e5b; font-weight: bold;")
+            self.server_test_label.setText(t("server_test_ok", sample=text))
+        else:
+            self.server_test_label.setStyleSheet("color: #d64545;")
+            self.server_test_label.setText(t("server_test_fail", why=text))
+
+    def _spin(self, key, look, suffix):
+        box = QSpinBox()
+        box.setRange(*CAPTION_RANGES[key])
+        box.setSuffix(suffix)
+        box.setValue(look[key])
+        return box
+
+    def _caption_changed(self, *_):
+        """A caption setting was changed: use it, and show a sample for a moment so the result can be seen."""
+        self.apply()
+        if self.captions is not None:
+            self.captions.preview(t("caption_sample_said"), t("caption_sample_translation"))
 
     def _show_gemini_help(self, *_):
         self.gemini_help.setVisible(self.server_kind.currentData() == "gemini")
@@ -1059,6 +1184,8 @@ class Panel(QWidget):
         self.speech_fast.setItemText(0, t("engine_fast"))
         self.speech_fast.setItemText(1, t("engine_accurate"))
         self.speech_lang.setItemText(0, t("auto_detect"))
+        self.caption_position.setItemText(0, t("caption_bottom"))
+        self.caption_position.setItemText(1, t("caption_top"))
         if self.source.itemData(0) == "auto":
             self.source.setItemText(0, t("auto_detect"))
         for i, (name, mb) in enumerate(MODELS.items()):
@@ -1116,6 +1243,10 @@ class Panel(QWidget):
             "speech_enabled": self.speech_enabled.isChecked(), "speech_source": self.speech_source.currentData(),
             "speech_model": self.speech_model.currentData(), "speech_lang": self.speech_lang.currentData(),
             "speech_fast": bool(self.speech_fast.currentData()),
+            "caption_width": self.caption_width.value(), "caption_font": self.caption_font.value(),
+            "caption_opacity": self.caption_opacity.value(), "caption_lines": self.caption_lines.value(),
+            "caption_position": self.caption_position.currentData(),
+            "caption_show_said": self.caption_show_said.isChecked(),
             "ui_language": self.ui_language,
         }
 
@@ -1127,9 +1258,11 @@ class Panel(QWidget):
         self.overlay.set_cover_all(s["cover_all"])
         SETTINGS_PATH.write_text(json.dumps(s, ensure_ascii=False, indent=2), encoding="utf-8")
         self.worker.configure(s)
+        if self.captions is not None:
+            self.captions.configure(s)
+            self.captions.set_capture_hidden(s["hide_from_capture"])
         if self.speech is not None:
             self.speech.configure(s)
-            self.captions.set_capture_hidden(s["hide_from_capture"])
         try:
             set_autostart(s["autostart"])
         except OSError:

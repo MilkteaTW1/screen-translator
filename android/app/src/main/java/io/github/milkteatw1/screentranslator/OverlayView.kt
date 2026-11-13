@@ -55,6 +55,9 @@ class OverlayView(context: Context) : View(context) {
             postInvalidate()
         }
 
+    /** Asked each time the captions are drawn, so a changed setting shows at once. */
+    @Volatile var captionLook: () -> CaptionLook = { CaptionLook() }
+
     private val density = resources.displayMetrics.density
     private val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.argb(225, 20, 20, 20) }
     private val cover = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.argb(245, 20, 20, 20) }
@@ -158,24 +161,29 @@ class OverlayView(context: Context) : View(context) {
 
     /** The speech strip: a list at the bottom of the screen, newest line lowest. */
     private fun drawCaptions(canvas: Canvas) {
-        val lines = captions.takeLast(4)
+        val look = captionLook()
         val live = partial
-        if (lines.isEmpty() && live.first.isEmpty()) return
-        val boxWidth = width * 0.94f
+        if (captions.isEmpty() && live.first.isEmpty()) return
+        val boxWidth = width * look.widthPct / 100f
         val left = (width - boxWidth) / 2
-        val said = TextPaint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(210, 210, 210); textSize = 18 * density }
-        val spoken = TextPaint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(255, 235, 140); textSize = 26 * density; isFakeBoldText = true }
-        var bottom = height - 72 * density
+        val said = TextPaint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(210, 210, 210); textSize = look.originalSp * density }
+        val spoken = TextPaint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(255, 235, 140); textSize = look.fontSp * density; isFakeBoldText = true }
+        val background = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.argb(look.backgroundAlpha, 20, 20, 20) }
         // The sentence being spoken shows its last words only, so a long one never fills the screen.
-        val rows = lines + (if (live.first.isNotEmpty()) listOf(live.first.takeLast(160) to live.second.takeLast(120)) else emptyList())
-        for ((heard, translated) in rows.reversed()) {
-            val layouts = listOf(translated to spoken, heard to said).filter { it.first.isNotEmpty() }.map { (t, p) ->
-                StaticLayout.Builder.obtain(t, 0, t.length, p, (boxWidth - 24).toInt()).build()
-            }
-            val live = heard == rows.last().first && translated == rows.last().second && this.partial.first.isNotEmpty()
-            val boxHeight = maxOf(layouts.sumOf { it.height } + 16f, if (live) 2f * (spoken.fontSpacing + said.fontSpacing) * 0.75f + 16f else 0f)  // the live row does not jump as it grows
-            val top = bottom - boxHeight
-            canvas.drawRoundRect(RectF(left, top, left + boxWidth, bottom), 12f, 12f, fill)
+        val rows = (captions + (if (live.first.isNotEmpty()) listOf(live.first.takeLast(160) to live.second.takeLast(120)) else emptyList()))
+            .takeLast(look.lines)
+        val boxes = rows.map { (heard, translated) ->
+            val parts = listOf(translated to spoken, heard to said).filter { it.first.isNotEmpty() && (look.showOriginal || it.second === spoken || translated.isEmpty()) }
+            val layouts = parts.map { (t, p) -> StaticLayout.Builder.obtain(t, 0, t.length, p, (boxWidth - 24).toInt()).build() }
+            val isLive = heard == rows.last().first && translated == rows.last().second && this.partial.first.isNotEmpty()
+            // the live row does not jump as it grows
+            layouts to maxOf(layouts.sumOf { it.height } + 16f, if (isLive) 2f * (spoken.fontSpacing + said.fontSpacing) * 0.75f + 16f else 0f)
+        }
+        // From the bottom edge up, or from below the status bar down; the newest caption is always the lowest.
+        var edge = if (look.top) 40 * density else height - 72 * density
+        for ((layouts, boxHeight) in if (look.top) boxes else boxes.reversed()) {
+            val top = if (look.top) edge else edge - boxHeight
+            canvas.drawRoundRect(RectF(left, top, left + boxWidth, top + boxHeight), 12f, 12f, background)
             var y = top + 8
             for (layout in layouts) {
                 canvas.save()
@@ -184,7 +192,7 @@ class OverlayView(context: Context) : View(context) {
                 canvas.restore()
                 y += layout.height
             }
-            bottom = top - 6
+            edge = if (look.top) top + boxHeight + 6 else top - 6
         }
     }
 }

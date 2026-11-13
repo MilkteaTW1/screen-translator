@@ -35,6 +35,9 @@ MAX_SEGMENT = 12.0  # seconds: cut here whatever happens so captions keep up
 MIN_SPEECH = 0.4  # seconds: shorter sounds are clicks, not speech
 MAX_BACKLOG = 3  # utterances waiting for transcription; older ones are dropped to stay real-time
 LIVE_TRANSLATE_EVERY = 1.0  # seconds between translations of the sentence being spoken: one request per word got Google to refuse everything
+# Spoken languages Whisper reads besides those the screen can be translated into (code -> English name).
+EXTRA_SPOKEN = {"nl": "dutch", "pl": "polish", "tr": "turkish", "hi": "hindi", "uk": "ukrainian", "he": "hebrew",
+                "sv": "swedish", "cs": "czech", "el": "greek", "ms": "malay"}
 STREAM_TRANSLATE_EVERY = 0.5  # seconds between translations of the sentence being spoken (streaming recognition)
 FINISH_REUSE_GAP = 0.9  # a live reading that covers all but this much of the sentence is taken as the final one (no second pass)
 PARTIAL_STEP = 0.3  # seconds of new speech between live updates of the sentence being spoken

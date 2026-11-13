@@ -26,8 +26,10 @@ MODELS = {
 
 
 def key_for(language):
-    """The streaming model that reads [language] ("auto" or a code), or None when only Whisper can."""
-    if language in ("auto", "zh", "en"):
+    """The streaming model that reads the spoken [language] (a code), or None when only Whisper can. "auto" is Whisper's:
+    it hears the language by itself, and the streaming models each read only a few (the bilingual one would turn
+    Japanese or French into English and Chinese nonsense)."""
+    if language in ("zh", "en"):
         return "en" if language == "en" else "zh-en"
     for key, m in MODELS.items():
         if language in m["langs"]:

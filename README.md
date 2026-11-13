@@ -72,7 +72,9 @@ Your normal use of the computer is not disturbed.
 - Shortcuts that work in any program: Ctrl+Alt+T start/stop, Ctrl+Alt+H hide/show translations, Ctrl+Alt+R choose a region.
 - Region and game / video mode: translate only a rectangle you drag (subtitles, a game's dialogue box), scanned faster, with boxes over vanished text dropped sooner.
 - Hover mode: a translation shows only while the mouse is over its text.
-- DeepL with your own key (Quality tab) can be used before Google.
+- DeepL or Gemini with your own key (Quality tab on the PC, same tab on the phone) can be used before Google. A key is tested as soon as you paste it: one real request, then a green tick or a red cross with the reason.
+- Captions are yours to shape (Speech tab, phone too): width, text size, background, top or bottom of the screen, number of lines, and whether the original words show under the translation. A sample appears while you change them.
+- Speech language: *Auto* hears any language Whisper knows and uses the accurate engine; choose English, Chinese, Japanese, Korean, Russian, Thai, Vietnamese, Arabic or Indonesian to get the fast word-by-word captions.
 - macOS: the same app using Apple Vision OCR (`.dmg` in Releases; built by CI and not yet tested on a real Mac by the author, so please report problems; speech from the Mac's own sound needs the free BlackHole driver).
 - Best offline wording (optional 2.5 GB download): Google's TranslateGemma 4B improves the quick offline draft in the background (Windows).
 - Light on resources: runs at below-normal priority, 2 translation threads, no torch/spacy; starts in about a second
@@ -235,7 +237,9 @@ MIT
 - 快捷鍵(任何程式中都能用):Ctrl+Alt+T 開始/停止、Ctrl+Alt+H 隱藏/顯示譯文、Ctrl+Alt+R 選擇區域。
 - 區域與遊戲/影片模式:只翻譯你框選的矩形(字幕、遊戲對話框),掃描更快,消失的文字更快移除。
 - 懸停模式:滑鼠移到文字上才顯示該處譯文。
-- 可在「品質」分頁使用自己的 DeepL 金鑰,排在 Google 之前。
+- 可在「品質」分頁使用自己的 DeepL 或 Gemini 金鑰,排在 Google 之前(手機版同樣在「品質」分頁)。貼上金鑰後會自動測試:實際呼叫一次,成功顯示綠色勾勾,失敗顯示紅色叉叉和原因。
+- 字幕外觀可自訂(語音分頁,手機版也有):寬度、文字大小、底色透明度、顯示在螢幕上方或下方、同時顯示幾行、要不要在譯文下方顯示原文。調整時會先出現範例。
+- 說話語言:選「自動偵測」會聽懂 Whisper 支援的任何語言,但使用準確模式;選英文、中文、日文、韓文、俄文、泰文、越南文、阿拉伯文或印尼文,才有一邊說一邊出字的快速字幕。
 - 最佳離線翻譯(選用,下載 2.5 GB):Google TranslateGemma 4B 在背景把離線草稿換成更好的譯文(Windows)。
 - 低資源:以低優先權執行、翻譯只用 2 個執行緒、不含 torch/spacy,約一秒啟動,
   可開機自動啟動並縮小到系統匣、啟動即開始翻譯。
