@@ -97,10 +97,11 @@
     <string name="speech_silent_phone">沒有收到手機的聲音。有在播放嗎?有些 App 不允許錄下它的聲音。</string>
     <string name="speech_silent_mic">麥克風沒有收到聲音。</string>
     <string name="auto_detect">自動偵測</string>
+    <string name="speech_moved">聽到%1$s,已切換辨識方式</string>
     <string name="speech_engine_label">字幕方式</string>
     <string name="engine_fast">快速:邊說邊出字</string>
     <string name="engine_accurate">精準:整句聽完再出字</string>
-    <string name="speech_engine_note">快速模式需要一個額外的小模型(英文 72 MB、中文 200 MB、韓文 132 MB、日文/越南文/印尼文/俄文/泰文/阿拉伯文 340 MB)。選「自動偵測」或其他語言時,會改用精準模式。</string>
+    <string name="speech_engine_note">快速模式需要一個額外的小模型(英文 72 MB、中文 200 MB、韓文 132 MB、日文/越南文/印尼文/俄文/泰文/阿拉伯文 340 MB)。選「自動偵測」時一開始用快速模式(英、中、日、俄、泰、阿拉伯、越南文),聽到其他語言時會切換成精準模式(需已下載精準模型)。</string>
     <string name="stream_model_title">下載快速語音模型?</string>
     <string name="stream_model_text">快速字幕需要這個語言的語音模型(約 %1$d MB,只需下載一次)。要怎麼下載?</string>
     <string name="speech_model_label">語音模型</string>

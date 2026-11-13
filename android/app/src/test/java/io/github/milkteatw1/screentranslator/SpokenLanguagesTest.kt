@@ -38,7 +38,7 @@ class SpokenLanguagesTest {
     }
 
     @Test
-    fun autoUsesWhisperSoAnyLanguageWorks() {
-        assertNull(StreamingModel.useFor(true, "auto"))
+    fun languagesTheAutoModelCannotReadStayWithWhisper() {
+        for (code in listOf("fr", "de", "es", "nl", "tr")) assertTrue(code, code !in StreamingModel.AUTO_LANGS)
     }
 }

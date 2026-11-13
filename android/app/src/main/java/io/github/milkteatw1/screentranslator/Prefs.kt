@@ -4,6 +4,7 @@ import android.content.Context
 
 /** The user's choices, shared between the settings screen and the capture service. */
 class Prefs(context: Context) {
+    private val app = context.applicationContext
     private val sp = context.getSharedPreferences("settings", Context.MODE_PRIVATE)
 
     var source: Int
@@ -130,7 +131,7 @@ class Prefs(context: Context) {
         get() = sp.getBoolean("speechFast", true)
         set(v) = sp.edit().putBoolean("speechFast", v).apply()
     /** The streaming model that will be used now, or null (Whisper: fast captions off, "Auto", or a language without one). */
-    val streamingModel get() = StreamingModel.useFor(speechFast, spokenLanguage)
+    val streamingModel get() = StreamingModel.useFor(speechFast, spokenLanguage) { StreamingModel.isInstalled(app, it) }
     val whisperModel get() = WhisperModel.spec(speechModel)
     val sourceLang get() = Langs.sources[source]
     val targetLang get() = Langs.targets[target]
