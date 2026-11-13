@@ -23,6 +23,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
 import com.google.mlkit.common.model.DownloadConditions
 import com.google.mlkit.common.model.RemoteModelManager
+import com.google.mlkit.nl.translate.TranslateLanguage
 import com.google.mlkit.nl.translate.TranslateRemoteModel
 import io.github.milkteatw1.screentranslator.Ui.dp
 
@@ -150,8 +151,8 @@ class MainActivity : ComponentActivity() {
         speechCard.addView(Ui.text(ctx, getString(R.string.source_note), 12f, Ui.MUTED).apply { setPadding(0, dp(8), 0, 0) })
         speechCard.addView(Ui.label(ctx, getString(R.string.spoken_language)))
         // Whisper hears every language and says which it was; a fixed language only helps when detection guesses wrong.
-        val spokenCodes = listOf("auto") + Langs.sources.map { it.code }
-        val speechLang = Ui.spinner(ctx, listOf(getString(R.string.auto_detect)) + Langs.sources.map { it.label },
+        val spokenCodes = listOf("auto") + Langs.spoken.map { it.code }
+        val speechLang = Ui.spinner(ctx, listOf(getString(R.string.auto_detect)) + Langs.spoken.map { it.label },
             spokenCodes.indexOf(prefs.spokenLanguage).coerceAtLeast(0))
         speechCard.addView(speechLang)
         speechCard.addView(Ui.label(ctx, getString(R.string.speech_engine_label)))
@@ -541,7 +542,7 @@ class MainActivity : ComponentActivity() {
         // Needed even with Google on: it is what translates when Google can't (no internet, or "too many requests").
         val langs = mutableListOf(prefs.targetLang.code)
         if (prefs.screenText) langs += prefs.sourceLang.code
-        if (prefs.speech && prefs.spokenLanguage != "auto") langs += prefs.spokenLanguage
+        if (prefs.speech && prefs.spokenLanguage != "auto" && TranslateLanguage.fromLanguageTag(prefs.spokenLanguage) != null) langs += prefs.spokenLanguage
         val needed = langs.filter { it != "en" }.distinct()
         val manager = RemoteModelManager.getInstance()
         manager.getDownloadedModels(TranslateRemoteModel::class.java).addOnSuccessListener { have ->
@@ -561,7 +562,7 @@ class MainActivity : ComponentActivity() {
             .show()
     }
 
-    private fun name(code: String) = (Langs.sources + Langs.targets).firstOrNull { it.code == code }?.label ?: code
+    private fun name(code: String) = (Langs.spoken + Langs.targets).firstOrNull { it.code == code }?.label ?: code
 
     private fun download(codes: List<String>, wifiOnly: Boolean, onReady: () -> Unit) {
         val conditions = DownloadConditions.Builder().apply { if (wifiOnly) requireWifi() }.build()
