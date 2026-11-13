@@ -245,7 +245,7 @@ def test_english_words_inside_chinese_speech_are_translated_alone():
 
 def test_streaming_models_are_chosen_by_the_spoken_language():
     from screen_translator import streaming
-    assert streaming.key_for("auto") == "zh-en" and streaming.key_for("zh") == "zh-en"
+    assert streaming.key_for("auto") is None and streaming.key_for("zh") == "zh-en"
     assert streaming.key_for("en") == "en" and streaming.key_for("ko") == "ko" and streaming.key_for("ja") == "multi"
     assert streaming.key_for("fr") is None  # only Whisper reads it
 
@@ -286,3 +286,19 @@ def test_fast_captions_show_words_at_once_and_end_with_a_translated_line(monkeyp
     words = [s[1] for s in seen if s[0] == "live"]
     assert words[:2] == ["Hello", "Hello there"]
     assert seen[-1] == ("final", "Hello there my friend", "譯:Hello there my friend")
+
+
+def test_auto_language_uses_whisper_even_in_fast_mode_so_every_language_is_heard(monkeypatch):
+    from screen_translator import streaming
+    w, _seen = worker(monkeypatch)
+    monkeypatch.setattr(streaming, "find", lambda key: "folder")  # every streaming model is downloaded
+    w.settings["speech_fast"] = True
+    w.settings["speech_lang"] = "auto"
+    assert w.stream_key() is None  # the English/Chinese model would turn Japanese or French into nonsense
+    w.settings["speech_lang"] = "ja"
+    assert w.stream_key() == "multi"
+    w.settings["speech_lang"] = "fr"
+    assert w.stream_key() is None  # no streaming model for French: Whisper
+    w.settings["speech_fast"] = False
+    w.settings["speech_lang"] = "en"
+    assert w.stream_key() is None  # fast mode off

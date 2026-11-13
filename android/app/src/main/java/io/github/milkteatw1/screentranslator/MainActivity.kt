@@ -17,12 +17,14 @@ import android.view.ViewGroup
 import android.widget.AdapterView
 import android.widget.LinearLayout
 import android.widget.ScrollView
+import android.widget.SeekBar
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
 import com.google.mlkit.common.model.DownloadConditions
 import com.google.mlkit.common.model.RemoteModelManager
+import com.google.mlkit.nl.translate.TranslateLanguage
 import com.google.mlkit.nl.translate.TranslateRemoteModel
 import io.github.milkteatw1.screentranslator.Ui.dp
 
@@ -150,10 +152,15 @@ class MainActivity : ComponentActivity() {
         speechCard.addView(Ui.text(ctx, getString(R.string.source_note), 12f, Ui.MUTED).apply { setPadding(0, dp(8), 0, 0) })
         speechCard.addView(Ui.label(ctx, getString(R.string.spoken_language)))
         // Whisper hears every language and says which it was; a fixed language only helps when detection guesses wrong.
-        val spokenCodes = listOf("auto") + Langs.sources.map { it.code }
-        val speechLang = Ui.spinner(ctx, listOf(getString(R.string.auto_detect)) + Langs.sources.map { it.label },
+        val spokenCodes = listOf("auto") + Langs.spoken.map { it.code }
+        val speechLang = Ui.spinner(ctx, listOf(getString(R.string.auto_detect)) + Langs.spoken.map { it.label },
             spokenCodes.indexOf(prefs.spokenLanguage).coerceAtLeast(0))
         speechCard.addView(speechLang)
+        speechCard.addView(Ui.label(ctx, getString(R.string.speech_engine_label)))
+        val engineChoice = Ui.spinner(ctx, listOf(getString(R.string.engine_fast), getString(R.string.engine_accurate)),
+            if (prefs.speechFast) 0 else 1)
+        speechCard.addView(engineChoice)
+        speechCard.addView(Ui.text(ctx, getString(R.string.speech_engine_note), 12f, Ui.MUTED).apply { setPadding(0, dp(8), 0, 0) })
         speechCard.addView(Ui.label(ctx, getString(R.string.speech_model_label)))
         val modelChoice = Ui.spinner(ctx, WhisperModel.models.map {
             getString(if (it.name == "base") R.string.model_base else R.string.model_tiny, it.megabytes)
@@ -161,13 +168,77 @@ class MainActivity : ComponentActivity() {
         speechCard.addView(modelChoice)
         pages[1].addView(speechCard)
 
+        // How the captions look: width, text size, background, place and number of lines, with a sample.
+        val captionCard = Ui.card(ctx, getString(R.string.section_captions))
+        val sample = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(12), dp(8), dp(12), dp(8)) }
+        val sampleTranslation = Ui.text(ctx, getString(R.string.caption_sample_translation), 26f, Ui.ACCENT, bold = true)
+        val sampleOriginal = Ui.text(ctx, getString(R.string.caption_sample_original), 17f, Color.rgb(210, 210, 210))
+        sample.addView(sampleTranslation)
+        sample.addView(sampleOriginal)
+        val samplePlace = LinearLayout(ctx).apply { orientation = LinearLayout.HORIZONTAL; weightSum = 100f }
+        val spaceLeft = View(ctx)
+        val spaceRight = View(ctx)
+        samplePlace.addView(spaceLeft)
+        samplePlace.addView(sample)
+        samplePlace.addView(spaceRight)
+        captionCard.addView(samplePlace, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+            .apply { bottomMargin = dp(8) })
+        lateinit var showSample: () -> Unit
+        var captionChanged: () -> Unit = {}  // set once save() exists
+        fun slider(labelRes: Int, range: IntRange, value: Int): SeekBar {
+            val title = Ui.label(ctx, "")
+            val bar = SeekBar(ctx).apply { max = range.last - range.first; progress = value.coerceIn(range) - range.first }
+            fun show() { title.text = getString(labelRes, bar.progress + range.first) }
+            show()
+            bar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(s: SeekBar?, p: Int, fromUser: Boolean) { show(); showSample(); captionChanged() }
+                override fun onStartTrackingTouch(s: SeekBar?) {}
+                override fun onStopTrackingTouch(s: SeekBar?) {}
+            })
+            captionCard.addView(title)
+            captionCard.addView(bar)
+            return bar
+        }
+        val captionWidth = slider(R.string.caption_width_label, CaptionLook.WIDTH, prefs.captionWidth)
+        val captionFont = slider(R.string.caption_font_label, CaptionLook.FONT, prefs.captionFont)
+        val captionOpacity = slider(R.string.caption_opacity_label, CaptionLook.OPACITY, prefs.captionOpacity)
+        val captionLines = slider(R.string.caption_lines_label, CaptionLook.LINES, prefs.captionLines)
+        captionCard.addView(Ui.label(ctx, getString(R.string.caption_position)))
+        val captionPosition = Ui.spinner(ctx, listOf(getString(R.string.caption_bottom), getString(R.string.caption_top)), if (prefs.captionTop) 1 else 0)
+        captionCard.addView(captionPosition)
+        val captionShowOriginal = Ui.switch(ctx, getString(R.string.caption_show_original), prefs.captionShowOriginal)
+        captionCard.addView(captionShowOriginal)
+        fun captionLook() = CaptionLook.of(captionWidth.progress + CaptionLook.WIDTH.first, captionFont.progress + CaptionLook.FONT.first,
+            captionOpacity.progress + CaptionLook.OPACITY.first, captionPosition.selectedItemPosition == 1,
+            captionLines.progress + CaptionLook.LINES.first, captionShowOriginal.isChecked)
+        showSample = {
+            val look = captionLook()
+            sample.background = Ui.rounded(Color.argb(look.backgroundAlpha, 20, 20, 20), 12f, ctx)
+            sampleTranslation.textSize = look.fontSp.toFloat()
+            sampleOriginal.textSize = look.originalSp.toFloat()
+            sampleOriginal.visibility = if (look.showOriginal) View.VISIBLE else View.GONE
+            (sample.layoutParams as LinearLayout.LayoutParams).weight = look.widthPct.toFloat()
+            (spaceLeft.layoutParams as LinearLayout.LayoutParams).weight = (100 - look.widthPct) / 2f
+            (spaceRight.layoutParams as LinearLayout.LayoutParams).weight = (100 - look.widthPct) / 2f
+            samplePlace.requestLayout()
+        }
+        for (v in listOf(spaceLeft, sample, spaceRight)) v.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 0f)
+        showSample()
+        pages[1].addView(captionCard)
+
         // Quality: the engine, names, speed.
+        val names = Ui.card(ctx, getString(R.string.section_names))
+        val skip = Ui.switch(ctx, getString(R.string.skip_names), prefs.skipNames)
+        names.addView(skip)
+        names.addView(Ui.label(ctx, getString(R.string.glossary_label)))
+        val glossary = Ui.field(ctx, prefs.glossary, lines = 3).apply { hint = "Hatsune Miku\nNVIDIA\nthread = 執行緒" }
+        names.addView(glossary)
+        pages[2].addView(names)
         val engine = Ui.card(ctx, getString(R.string.section_engine))
         val google = Ui.switch(ctx, getString(R.string.use_google), prefs.useGoogle)
         engine.addView(google)
         val remember = Ui.switch(ctx, getString(R.string.remember_translations), prefs.rememberTranslations)
         engine.addView(remember)
-        pages[2].addView(engine)
         // Gemini with the user's own key: tried before Google. For people who do not know where a key comes from: a link and steps.
         val gemini = Ui.card(ctx, getString(R.string.section_gemini))
         gemini.addView(Ui.label(ctx, getString(R.string.gemini_key_label)))
@@ -176,12 +247,15 @@ class MainActivity : ComponentActivity() {
             inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD
         }
         gemini.addView(geminiKey)
+        val geminiTest = keyTest(geminiKey) { key -> KeyCheck.gemini(key, prefs.targetLang) }
+        gemini.addView(geminiTest)
         gemini.addView(Ui.text(ctx, getString(R.string.gemini_steps), 13f, Ui.MUTED).apply { setPadding(0, dp(10), 0, 0) })
         gemini.addView(Ui.pill(ctx, getString(R.string.gemini_get_key), false).apply {
             setOnClickListener { startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(GeminiTranslate.KEY_PAGE))) }
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)
                 .apply { topMargin = dp(12) }
         })
+        pages[2].addView(engine)
         pages[2].addView(gemini)
         val deepl = Ui.card(ctx, getString(R.string.section_deepl))
         deepl.addView(Ui.label(ctx, getString(R.string.deepl_key_label)))
@@ -190,19 +264,14 @@ class MainActivity : ComponentActivity() {
             inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD
         }
         deepl.addView(deeplKey)
+        val deeplTest = keyTest(deeplKey) { key -> KeyCheck.deepl(key, prefs.targetLang) }
+        deepl.addView(deeplTest)
         deepl.addView(Ui.pill(ctx, getString(R.string.deepl_get_key), false).apply {
             setOnClickListener { startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(DeeplTranslate.KEY_PAGE))) }
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)
                 .apply { topMargin = dp(12) }
         })
         pages[2].addView(deepl)
-        val names = Ui.card(ctx, getString(R.string.section_names))
-        val skip = Ui.switch(ctx, getString(R.string.skip_names), prefs.skipNames)
-        names.addView(skip)
-        names.addView(Ui.label(ctx, getString(R.string.glossary_label)))
-        val glossary = Ui.field(ctx, prefs.glossary, lines = 3).apply { hint = "Hatsune Miku\nNVIDIA\nthread = 執行緒" }
-        names.addView(glossary)
-        pages[2].addView(names)
         val speed = Ui.card(ctx, getString(R.string.section_speed))
         speed.addView(Ui.label(ctx, getString(R.string.refresh_interval)))
         val interval = Ui.field(ctx, (prefs.intervalMs / 1000.0).toString(), number = true)
@@ -225,7 +294,7 @@ class MainActivity : ComponentActivity() {
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)
                 .apply { topMargin = dp(12) }
         })
-        pages[2].addView(speed)
+        pages[0].addView(speed)  // display and speed sit on the Translate tab, as on the desktop
 
         // General: interface language, version and updates.
         val look = Ui.card(ctx, getString(R.string.ui_language))
@@ -287,23 +356,36 @@ class MainActivity : ComponentActivity() {
             prefs.speechMic = soundSource.selectedItemPosition == 1
             prefs.spokenLanguage = spokenCodes[speechLang.selectedItemPosition]
             prefs.speechModel = WhisperModel.models[modelChoice.selectedItemPosition].name
+            val look = captionLook()
+            prefs.captionWidth = look.widthPct
+            prefs.captionFont = look.fontSp
+            prefs.captionOpacity = look.opacityPct
+            prefs.captionTop = look.top
+            prefs.captionLines = look.lines
+            prefs.captionShowOriginal = look.showOriginal
+            prefs.speechFast = engineChoice.selectedItemPosition == 0
         }
-        for (s in listOf(google, remember, skip, hideOnScroll, gameMode, coverAll)) s.setOnCheckedChangeListener { _, _ -> save() }
+        for (s in listOf(google, remember, skip, hideOnScroll, gameMode, coverAll, captionShowOriginal)) {
+            s.setOnCheckedChangeListener { _, _ -> save(); showSample() }
+        }
+        captionChanged = { save() }  // the sample and the saved value follow the thumb
         for (field in listOf(geminiKey, deeplKey)) field.addTextChangedListener(object : android.text.TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
             override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
             override fun afterTextChanged(s: android.text.Editable?) { save() }
         })
         val saveOnPick = object : AdapterView.OnItemSelectedListener {
-            var first = 2
+            var first = 3
             override fun onItemSelected(p: AdapterView<*>?, v: View?, pos: Int, id: Long) {
                 if (first > 0) { first--; return }
                 save()
             }
             override fun onNothingSelected(p: AdapterView<*>?) {}
         }
+        captionPosition.onItemSelectedListener = saveOnPick
         speechLang.onItemSelectedListener = saveOnPick
         modelChoice.onItemSelectedListener = saveOnPick
+        engineChoice.onItemSelectedListener = saveOnPick
         soundSource.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
             var first = 1
             override fun onItemSelected(p: AdapterView<*>?, v: View?, pos: Int, id: Long) {
@@ -375,6 +457,46 @@ class MainActivity : ComponentActivity() {
                 else -> restart(screen = CaptureService.running && CaptureService.screenOn, speech = true)
             }
         }
+    }
+
+    /** The line under an API key field: a moment after the key is typed or pasted it is tested with one real request and
+     *  shows a green tick or a red cross with the reason. Tap it to test again. */
+    private fun keyTest(field: android.widget.EditText, check: (String) -> KeyCheck.Verdict): TextView {
+        val line = Ui.text(this, "", 13f, Ui.MUTED).apply { setPadding(0, dp(8), 0, 0) }
+        val handler = android.os.Handler(android.os.Looper.getMainLooper())
+        var serial = 0
+        fun run() {
+            val key = field.text.toString().trim()
+            val mine = ++serial
+            if (key.isEmpty()) { line.text = ""; return }
+            line.setTextColor(Ui.MUTED)
+            line.text = getString(R.string.key_testing)
+            Thread {
+                val verdict = check(key)
+                runOnUiThread {
+                    if (mine != serial) return@runOnUiThread  // the key was changed since: this answer is about an older one
+                    when (verdict) {
+                        is KeyCheck.Verdict.Works -> { line.setTextColor(Color.rgb(61, 190, 120)); line.text = getString(R.string.key_works, verdict.sample) }
+                        is KeyCheck.Verdict.Fails -> { line.setTextColor(Color.rgb(235, 90, 90)); line.text = getString(R.string.key_fails, verdict.why) }
+                        is KeyCheck.Verdict.ModelUnavailable -> { line.setTextColor(Color.rgb(235, 90, 90)); line.text = getString(R.string.key_fails, verdict.why) }
+                    }
+                }
+            }.start()
+        }
+        val soon = Runnable { run() }
+        field.addTextChangedListener(object : android.text.TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
+            override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
+            override fun afterTextChanged(s: android.text.Editable?) {
+                serial++
+                handler.removeCallbacks(soon)
+                line.setTextColor(Ui.MUTED)
+                line.text = ""
+                if (!s.isNullOrBlank()) handler.postDelayed(soon, 800)
+            }
+        })
+        line.setOnClickListener { run() }
+        return line
     }
 
     override fun onResume() {
@@ -486,6 +608,18 @@ class MainActivity : ComponentActivity() {
     /** Speech recognition needs an offline model (about 40 MB); the user decides whether and how to download it. */
     private fun ensureSpeechModel(onReady: () -> Unit) {
         if (!prefs.speech) { onReady(); return }
+        val fast = prefs.streamingModel
+        if (fast != null) {
+            if (StreamingModel.isInstalled(this, fast)) { onReady(); return }
+            AlertDialog.Builder(this)
+                .setTitle(R.string.stream_model_title)
+                .setMessage(getString(R.string.stream_model_text, fast.megabytes))
+                .setPositiveButton(R.string.wifi_only) { _, _ -> downloadStream(fast, true, onReady) }
+                .setNeutralButton(R.string.any_network) { _, _ -> downloadStream(fast, false, onReady) }
+                .setNegativeButton(R.string.not_now) { _, _ -> status.text = getString(R.string.speech_model_needed) }
+                .show()
+            return
+        }
         val model = prefs.whisperModel
         if (WhisperModel.isInstalled(this, model)) { onReady(); return }
         AlertDialog.Builder(this)
@@ -495,6 +629,16 @@ class MainActivity : ComponentActivity() {
             .setNeutralButton(R.string.any_network) { _, _ -> downloadModel(model, false, onReady) }
             .setNegativeButton(R.string.not_now) { _, _ -> status.text = getString(R.string.speech_model_needed) }
             .show()
+    }
+
+    private fun downloadStream(model: StreamingModel.Spec, wifiOnly: Boolean, onReady: () -> Unit) {
+        status.text = getString(R.string.speech_model_downloading)
+        StreamingModel.download(this, model, wifiOnly,
+            progress = { pct -> runOnUiThread { status.text = getString(R.string.speech_model_progress, pct) } },
+            done = { err -> runOnUiThread {
+                if (err == null) { status.text = getString(R.string.speech_model_ready); onReady() }
+                else status.text = getString(R.string.download_failed, err.message ?: "")
+            } })
     }
 
     private fun downloadModel(model: WhisperModel.Spec, wifiOnly: Boolean, onReady: () -> Unit) {
@@ -512,7 +656,7 @@ class MainActivity : ComponentActivity() {
         // Needed even with Google on: it is what translates when Google can't (no internet, or "too many requests").
         val langs = mutableListOf(prefs.targetLang.code)
         if (prefs.screenText) langs += prefs.sourceLang.code
-        if (prefs.speech && prefs.spokenLanguage != "auto") langs += prefs.spokenLanguage
+        if (prefs.speech && prefs.spokenLanguage != "auto" && TranslateLanguage.fromLanguageTag(prefs.spokenLanguage) != null) langs += prefs.spokenLanguage
         val needed = langs.filter { it != "en" }.distinct()
         val manager = RemoteModelManager.getInstance()
         manager.getDownloadedModels(TranslateRemoteModel::class.java).addOnSuccessListener { have ->
@@ -532,7 +676,7 @@ class MainActivity : ComponentActivity() {
             .show()
     }
 
-    private fun name(code: String) = (Langs.sources + Langs.targets).firstOrNull { it.code == code }?.label ?: code
+    private fun name(code: String) = (Langs.spoken + Langs.targets).firstOrNull { it.code == code }?.label ?: code
 
     private fun download(codes: List<String>, wifiOnly: Boolean, onReady: () -> Unit) {
         val conditions = DownloadConditions.Builder().apply { if (wifiOnly) requireWifi() }.build()

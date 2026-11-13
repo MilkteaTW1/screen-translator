@@ -412,6 +412,22 @@ def server_translate_group(server, texts, src, dst):
     return None
 
 
+def check_server(settings, target="zh-TW"):
+    """Ask the own server / key from `settings` for one short translation, to see whether it works.
+    Returns (True, the translation), (False, why not), or (None, "") when no server is set up (or no key yet)."""
+    cfg = server_from_settings(settings)
+    if not cfg:
+        return None, ""
+    dst = target if argos_code(target) != "en" else "fr"  # a source and a target that differ, for every server kind
+    try:
+        out = server_translate_group(cfg, ["Hello world."], "en", dst)
+    except Exception as e:
+        return False, " ".join(str(e).split())[:200] or type(e).__name__
+    if not out or not out[0].strip():
+        return False, "the answer had no translation in it"
+    return True, out[0].strip()
+
+
 class DiskCache:
     """Google's translations kept in a file, so text read again (today or next week) is not sent again.
     Only Google's: a translation from the small offline model should not outlive the moment Google is back."""

@@ -72,7 +72,7 @@
     <string name="section_speech">語音</string>
     <string name="section_engine">翻譯引擎</string>
     <string name="section_names">專有名詞</string>
-    <string name="section_speed">速度</string>
+    <string name="section_speed">顯示與速度</string>
     <string name="section_app">應用程式</string>
     <string name="ui_language">介面語言</string>
     <string name="follow_system">跟隨手機</string>
@@ -97,6 +97,12 @@
     <string name="speech_silent_phone">沒有收到手機的聲音。有在播放嗎?有些 App 不允許錄下它的聲音。</string>
     <string name="speech_silent_mic">麥克風沒有收到聲音。</string>
     <string name="auto_detect">自動偵測</string>
+    <string name="speech_engine_label">字幕方式</string>
+    <string name="engine_fast">快速:邊說邊出字</string>
+    <string name="engine_accurate">精準:整句聽完再出字</string>
+    <string name="speech_engine_note">快速模式需要一個額外的小模型(英文 72 MB、中文 200 MB、韓文 132 MB、日文/越南文/印尼文/俄文/泰文/阿拉伯文 340 MB)。選「自動偵測」或其他語言時,會改用精準模式。</string>
+    <string name="stream_model_title">下載快速語音模型?</string>
+    <string name="stream_model_text">快速字幕需要這個語言的語音模型(約 %1$d MB,只需下載一次)。要怎麼下載?</string>
     <string name="speech_model_label">語音模型</string>
     <string name="model_base">Base:較準確(%1$d MB)</string>
     <string name="model_tiny">Tiny:較輕、較快(%1$d MB)</string>
@@ -111,4 +117,18 @@
     <string name="region_hint">拖曳框住要翻譯的文字</string>
     <string name="region_start_first">請先開始翻譯,再選擇區域。</string>
     <string name="cover_all">譯文直接蓋住原文(依原文靠左、置中或靠右排列)</string>
+    <string name="section_captions">語音字幕</string>
+    <string name="caption_sample_translation">譯文會長這樣。</string>
+    <string name="caption_sample_original">原文會長這樣。</string>
+    <string name="caption_width_label">字幕寬度:螢幕的 %1$d%%</string>
+    <string name="caption_font_label">字幕文字大小:%1$d(原文會小一點)</string>
+    <string name="caption_opacity_label">字幕底色:%1$d%%(0 = 透明)</string>
+    <string name="caption_lines_label">同時最多顯示幾則:%1$d</string>
+    <string name="caption_position">顯示位置</string>
+    <string name="caption_bottom">螢幕下方</string>
+    <string name="caption_top">螢幕上方</string>
+    <string name="caption_show_original">譯文下方同時顯示原文</string>
+    <string name="key_testing">測試中…</string>
+    <string name="key_works">✓ 可以用(「Hello world.」→ %1$s)</string>
+    <string name="key_fails">✗ 不能用:%1$s(點一下重新測試)</string>
 </resources>

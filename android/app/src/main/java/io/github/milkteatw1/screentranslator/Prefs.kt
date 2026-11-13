@@ -86,6 +86,26 @@ class Prefs(context: Context) {
         get() = sp.getString("speechModel", "base") ?: "base"
         set(v) = sp.edit().putString("speechModel", v).apply()
 
+    /** How the speech captions look (see CaptionLook for the ranges). */
+    var captionWidth: Int
+        get() = sp.getInt("captionWidth", 94)
+        set(v) = sp.edit().putInt("captionWidth", v).apply()
+    var captionFont: Int
+        get() = sp.getInt("captionFont", 26)
+        set(v) = sp.edit().putInt("captionFont", v).apply()
+    var captionOpacity: Int
+        get() = sp.getInt("captionOpacity", 88)
+        set(v) = sp.edit().putInt("captionOpacity", v).apply()
+    var captionTop: Boolean
+        get() = sp.getBoolean("captionTop", false)
+        set(v) = sp.edit().putBoolean("captionTop", v).apply()
+    var captionLines: Int
+        get() = sp.getInt("captionLines", 4)
+        set(v) = sp.edit().putInt("captionLines", v).apply()
+    var captionShowOriginal: Boolean
+        get() = sp.getBoolean("captionShowOriginal", true)
+        set(v) = sp.edit().putBoolean("captionShowOriginal", v).apply()
+
     /** Interface language ("" follows the phone). */
     var uiLanguage: String
         get() = sp.getString("uiLanguage", "") ?: ""
@@ -105,6 +125,12 @@ class Prefs(context: Context) {
         get() = sp.getLong("lastUpdateCheck", 0)
         set(v) = sp.edit().putLong("lastUpdateCheck", v).apply()
 
+    /** Fast captions (the words while they are spoken) where a streaming model reads the spoken language; false: Whisper, a sentence at a time. */
+    var speechFast: Boolean
+        get() = sp.getBoolean("speechFast", true)
+        set(v) = sp.edit().putBoolean("speechFast", v).apply()
+    /** The streaming model that will be used now, or null (Whisper: fast captions off, "Auto", or a language without one). */
+    val streamingModel get() = StreamingModel.useFor(speechFast, spokenLanguage)
     val whisperModel get() = WhisperModel.spec(speechModel)
     val sourceLang get() = Langs.sources[source]
     val targetLang get() = Langs.targets[target]

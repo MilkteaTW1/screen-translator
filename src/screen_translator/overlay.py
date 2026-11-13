@@ -310,10 +310,35 @@ class CoverChip(QWidget):
         p.drawText(self.rect(), Qt.AlignCenter, "譯")
 
 
+CAPTION_LOOK = {"caption_width": 80, "caption_font": 30, "caption_opacity": 88, "caption_position": "bottom",
+                "caption_lines": 4, "caption_show_said": True}
+CAPTION_RANGES = {"caption_width": (30, 100), "caption_font": (14, 72), "caption_opacity": (0, 100), "caption_lines": (1, 8)}
+
+
+def caption_look(settings):
+    """The caption settings, each inside its allowed range (a hand-edited settings file cannot break the strip)."""
+    look = {}
+    for key, default in CAPTION_LOOK.items():
+        value = settings.get(key, default)
+        if key in CAPTION_RANGES:
+            low, high = CAPTION_RANGES[key]
+            try:
+                value = min(high, max(low, int(value)))
+            except (TypeError, ValueError):
+                value = default
+        elif key == "caption_position":
+            value = value if value in ("top", "bottom") else default
+        else:
+            value = bool(value)
+        look[key] = value
+    return look
+
+
 class CaptionOverlay(QWidget):
-    """Click-through strip at the bottom of the screen listing what was just heard and its translation."""
-    MAX_LINES = 4
+    """Click-through strip listing what was just heard and its translation. Width, text size, background, place
+    (bottom or top of the screen) and number of lines are the user's to choose (see caption_look)."""
     LIFETIME = 25.0  # seconds a line stays up
+    SAMPLE_SECONDS = 4.0  # how long the sample stays up after a caption setting was changed
 
     def __init__(self, screen):
         super().__init__()
@@ -322,21 +347,45 @@ class CaptionOverlay(QWidget):
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.setAttribute(Qt.WA_ShowWithoutActivating)
         self.setAttribute(Qt.WA_TransparentForMouseEvents)
-        geo = screen.availableGeometry()
-        self.width_px = int(geo.width() * 0.8)
-        self.setGeometry(geo.x() + (geo.width() - self.width_px) // 2, geo.y() + geo.height() - 460,
-                         self.width_px, 450)
+        self.screen_ = screen
+        self.look = caption_look({})
+        self.width_px = 0
         self.lines = []  # (time, said, translation)
         self.live = None  # (said, translation) of the sentence still being spoken
         self.live_at = 0.0
+        self.sample = None  # (said, translation, until): shown while the user is choosing the look
+        self._place()
         self.timer = QTimer(self)
         self.timer.timeout.connect(self._expire)
         self.timer.start(1000)
 
+    def _place(self):
+        geo = self.screen_.availableGeometry()
+        self.width_px = int(geo.width() * self.look["caption_width"] / 100)
+        height = max(300, geo.height() // 2)
+        top = geo.y() + 10 if self.look["caption_position"] == "top" else geo.y() + geo.height() - height - 10
+        self.setGeometry(geo.x() + (geo.width() - self.width_px) // 2, top, self.width_px, height)
+
+    def configure(self, settings):
+        """Use the caption settings in `settings`."""
+        look = caption_look(settings)
+        if look == self.look:
+            return
+        self.look = look
+        self.lines = self.lines[-look["caption_lines"]:]
+        self._place()
+        self.update()
+
+    def preview(self, said, translation):
+        """Show a sample for a few seconds, so a changed size or width can be seen at once."""
+        self.sample = (said, translation, time.monotonic() + self.SAMPLE_SECONDS)
+        self.show()
+        self.update()
+
     def add(self, said, translation):
         """A finished sentence: it replaces the live line."""
         self.live = None
-        self.lines = (self.lines + [(time.monotonic(), said, translation)])[-self.MAX_LINES:]
+        self.lines = (self.lines + [(time.monotonic(), said, translation)])[-self.look["caption_lines"]:]
         self.show()
         self.update()
 
@@ -346,23 +395,27 @@ class CaptionOverlay(QWidget):
         self.live_at = time.monotonic()
         if self.live:
             self.show()
-        elif not self.lines:
+        elif not self.lines and not self.sample:
             self.hide()
         self.update()
 
     def clear(self):
         self.lines = []
         self.live = None
+        self.sample = None
         self.hide()
 
     def _expire(self):
         keep = [l for l in self.lines if time.monotonic() - l[0] < self.LIFETIME]
         stale = self.live is not None and time.monotonic() - self.live_at > self.LIFETIME  # speech stopped mid-sentence
+        sample_over = self.sample is not None and time.monotonic() > self.sample[2]
+        if sample_over:
+            self.sample = None
         if stale:
             self.live = None
-        if len(keep) != len(self.lines) or stale:
+        if len(keep) != len(self.lines) or stale or sample_over:
             self.lines = keep
-            if not keep and not self.live:
+            if not keep and not self.live and not self.sample:
                 self.hide()
             self.update()
 
@@ -370,25 +423,36 @@ class CaptionOverlay(QWidget):
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
         p.setRenderHint(QPainter.TextAntialiasing)
+        look = self.look
         said_font, tr_font = QFont(UI_FONT), QFont(UI_FONT)
-        said_font.setPixelSize(20)
-        tr_font.setPixelSize(30)
+        tr_font.setPixelSize(look["caption_font"])
+        said_font.setPixelSize(max(10, round(look["caption_font"] * 2 / 3)))
         inner = self.width_px - 24
-        y = self.height() - 6
         shown = [(said, translation) for _t, said, translation in self.lines]
         if self.live:
             shown.append(self.live)  # the sentence being spoken is the newest line, at the bottom
-        for said, translation in reversed(shown):
-            rows = [(translation, tr_font, QColor(255, 235, 140)), (said, said_font, QColor(200, 200, 200))]
+        if not shown and self.sample:
+            shown = [self.sample[:2]]
+        shown = shown[-look["caption_lines"]:]
+        background = QColor(20, 20, 20, round(255 * look["caption_opacity"] / 100))
+        boxes = []  # (rows, heights, box height), oldest first
+        for said, translation in shown:
+            rows = [(translation, tr_font, QColor(255, 235, 140))]
+            if look["caption_show_said"] or not translation:
+                rows.append((said, said_font, QColor(200, 200, 200)))
             rows = [(t, f, c) for t, f, c in rows if t]
             heights = [QFontMetricsF(f).boundingRect(QRectF(0, 0, inner, 10000), int(Qt.TextWordWrap), t).height()
                        for t, f, _c in rows]
             box = sum(heights) + 12
             if self.live and (said, translation) == self.live:
                 box = max(box, 2 * (QFontMetricsF(tr_font).lineSpacing() + QFontMetricsF(said_font).lineSpacing()) * 0.5 + 12)  # the live row does not jump as it grows
-            top = y - box
+            boxes.append((rows, heights, box))
+        top_aligned = look["caption_position"] == "top"
+        y = 6 if top_aligned else self.height() - 6
+        for rows, heights, box in (boxes if top_aligned else reversed(boxes)):
+            top = y if top_aligned else y - box
             p.setPen(Qt.NoPen)
-            p.setBrush(QColor(20, 20, 20, 225))
+            p.setBrush(background)
             p.drawRoundedRect(QRectF(0, top, self.width_px, box), 6, 6)
             row_top = top + 6
             for (t, f, c), h in zip(rows, heights):
@@ -396,7 +460,7 @@ class CaptionOverlay(QWidget):
                 p.setPen(c)
                 p.drawText(QRectF(12, row_top, inner, h), Qt.AlignLeft | Qt.TextWordWrap, t)
                 row_top += h
-            y = top - 6
+            y = top + box + 6 if top_aligned else top - 6
 
     def set_capture_hidden(self, hidden):
         hide_from_capture(self, hidden)

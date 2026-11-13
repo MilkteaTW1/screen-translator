@@ -1,3 +1,6 @@
+import java.net.URL
+import java.security.MessageDigest
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -11,8 +14,8 @@ android {
         applicationId = "io.github.milkteatw1.screentranslator"
         minSdk = 26
         targetSdk = 34
-        versionCode = 35
-        versionName = "0.6.3"
+        versionCode = 36
+        versionName = "0.6.4"
         externalNativeBuild { cmake { arguments += listOf("-DANDROID_STL=c++_static") } }
         ndk { abiFilters += listOf("arm64-v8a", "x86_64") }  // one APK that carries both
     }
@@ -46,6 +49,9 @@ android {
             signingConfig = signingConfigs.findByName("release") ?: signingConfigs.getByName("debug")
         }
     }
+    // sherpa-onnx brings ~67 MB of native libraries (arm64 + x86_64). Stored uncompressed they would double the APK;
+    // compressed they add about 25 MB (the phone unpacks them when installing).
+    packaging { jniLibs { useLegacyPackaging = true } }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
@@ -53,7 +59,27 @@ android {
     kotlinOptions { jvmTarget = "17" }
 }
 
+// Fast speech captions use sherpa-onnx (Apache-2.0). Its Android library is ~49 MB, so it is not in the repo: it is
+// downloaded once from the official release into app/libs (git-ignored) and checked against this SHA-256.
+val sherpaVersion = "2.0.1"
+val sherpaSha256 = "a8d09d1d32f3eb8520482c6d3d43fae674681c5b050385967c70a3c2c9bf0ee7"
+val sherpaAar = layout.projectDirectory.file("libs/sherpa-onnx-$sherpaVersion.aar").asFile
+val downloadSherpa by tasks.registering {
+    outputs.file(sherpaAar)
+    doLast {
+        fun sha(f: File) = MessageDigest.getInstance("SHA-256").digest(f.readBytes()).joinToString("") { "%02x".format(it) }
+        if (sherpaAar.isFile && sha(sherpaAar) == sherpaSha256) return@doLast
+        sherpaAar.parentFile.mkdirs()
+        val part = File(sherpaAar.path + ".part")
+        URL("https://github.com/k2-fsa/sherpa-onnx/releases/download/v$sherpaVersion/sherpa-onnx-$sherpaVersion.aar")
+            .openStream().use { input -> part.outputStream().use { input.copyTo(it) } }
+        check(sha(part) == sherpaSha256) { "sherpa-onnx $sherpaVersion download does not match its checksum" }
+        part.renameTo(sherpaAar)
+    }
+}
+
 dependencies {
+    implementation(files(sherpaAar).builtBy(downloadSherpa))
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("androidx.activity:activity-ktx:1.9.3")
     // On-device OCR: Latin is bundled; Chinese/Japanese/Korean models come from Google Play services on first use

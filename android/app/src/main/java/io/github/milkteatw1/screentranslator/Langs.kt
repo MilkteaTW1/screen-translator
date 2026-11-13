@@ -41,4 +41,25 @@ object Langs {
         Lang("ไทย Thai", TranslateLanguage.THAI),
         Lang("العربية Arabic", TranslateLanguage.ARABIC),
     )
+
+    /**
+     * Languages that can be spoken: Whisper hears all of these. The screen languages come first, then the ones that
+     * only speech uses. Those with a fast streaming model (English, Chinese, Korean, Japanese, Vietnamese, Indonesian,
+     * Russian, Thai, Arabic) get fast captions; the rest, and "Detect automatically", use Whisper.
+     */
+    val spoken: List<Lang> = sources + listOf(
+        Lang("Русский Russian", TranslateLanguage.RUSSIAN),
+        Lang("ไทย Thai", TranslateLanguage.THAI),
+        Lang("العربية Arabic", TranslateLanguage.ARABIC),
+        Lang("Nederlands", TranslateLanguage.DUTCH),
+        Lang("Polski", TranslateLanguage.POLISH),
+        Lang("Türkçe", TranslateLanguage.TURKISH),
+        Lang("हिन्दी Hindi", TranslateLanguage.HINDI),
+        Lang("Українська", TranslateLanguage.UKRAINIAN),
+        Lang("עברית Hebrew", TranslateLanguage.HEBREW),
+        Lang("Svenska", TranslateLanguage.SWEDISH),
+        Lang("Čeština", TranslateLanguage.CZECH),
+        Lang("Ελληνικά", TranslateLanguage.GREEK),
+        Lang("Bahasa Melayu", TranslateLanguage.MALAY),
+    ).filter { extra -> sources.none { it.code == extra.code } }
 }

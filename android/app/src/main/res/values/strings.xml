@@ -73,7 +73,7 @@
     <string name="section_speech">SPEECH</string>
     <string name="section_engine">TRANSLATION ENGINE</string>
     <string name="section_names">NAMES</string>
-    <string name="section_speed">SPEED</string>
+    <string name="section_speed">DISPLAY AND SPEED</string>
     <string name="section_app">APP</string>
     <string name="ui_language">INTERFACE LANGUAGE</string>
     <string name="follow_system">Follow the phone</string>
@@ -98,6 +98,12 @@
     <string name="speech_silent_phone">No sound from the phone. Is something playing? Some apps do not allow their sound to be recorded.</string>
     <string name="speech_silent_mic">No sound from the microphone.</string>
     <string name="auto_detect">Detect automatically</string>
+    <string name="speech_engine_label">Captions</string>
+    <string name="engine_fast">Fast: words appear while they are spoken</string>
+    <string name="engine_accurate">Accurate: a whole sentence at a time</string>
+    <string name="speech_engine_note">Fast needs a small extra model (English 72 MB, Chinese 200 MB, Korean 132 MB, Japanese, Vietnamese, Indonesian, Russian, Thai, Arabic 340 MB). With "Detect automatically", and for other languages, the accurate way is used.</string>
+    <string name="stream_model_title">Download fast speech model?</string>
+    <string name="stream_model_text">Fast captions need a speech model for this language (about %1$d MB, downloaded once). How do you want to download?</string>
     <string name="speech_model_label">Speech model</string>
     <string name="model_base">Base: more accurate (%1$d MB)</string>
     <string name="model_tiny">Tiny: lighter and faster (%1$d MB)</string>
@@ -112,4 +118,18 @@
     <string name="region_hint">Drag a rectangle around the text to translate</string>
     <string name="region_start_first">Start translating first, then choose the region.</string>
     <string name="cover_all">Replace the original text with its translation (lined up left / centre / right like the original)</string>
+    <string name="section_captions">SPEECH CAPTIONS</string>
+    <string name="caption_sample_translation">This is how the translation looks.</string>
+    <string name="caption_sample_original">This is how the original words look.</string>
+    <string name="caption_width_label">Caption width: %1$d%% of the screen</string>
+    <string name="caption_font_label">Caption text size: %1$d (the original is smaller)</string>
+    <string name="caption_opacity_label">Caption background: %1$d%% (0 = see-through)</string>
+    <string name="caption_lines_label">Most captions at once: %1$d</string>
+    <string name="caption_position">Place on screen</string>
+    <string name="caption_bottom">Bottom</string>
+    <string name="caption_top">Top</string>
+    <string name="caption_show_original">Also show the original words under the translation</string>
+    <string name="key_testing">Testing…</string>
+    <string name="key_works">✓ Works ("Hello world." → %1$s)</string>
+    <string name="key_fails">✗ Did not work: %1$s  (tap to test again)</string>
 </resources>

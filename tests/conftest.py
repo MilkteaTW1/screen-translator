@@ -48,3 +48,10 @@ def no_real_settings(monkeypatch, tmp_path):
     """Tests never read or write this machine's settings file (changing a switch in a test saves it)."""
     from screen_translator import app
     monkeypatch.setattr(app, "SETTINGS_PATH", tmp_path / "settings.json")
+
+
+@pytest.fixture(autouse=True)
+def no_real_server_test(monkeypatch):
+    """Typing a key into the settings tests it with a real request: tests never send one."""
+    from screen_translator import app
+    monkeypatch.setattr(app, "check_server", lambda settings, target="zh-TW": (None, ""))
