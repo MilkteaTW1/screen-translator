@@ -74,4 +74,23 @@ class ScrollTrackerTest {
         assertTrue(ScrollTracker.stayed(a, b, dy / stepY, 0, 30, 0, cols))
         assertTrue(!ScrollTracker.stayed(a, b, dy / stepY, 200, 260, 0, cols))
     }
+
+    @Test
+    fun aScrollIsStillMeasuredWhenBigBoxesCoverMostOfTheScreen() {
+        val p = page(7)
+        val a = view(p, 100)
+        val b = view(p, 130)
+        // translation boxes over two thirds of the screen (a feed full of text): only one strip stays readable
+        val boxes = listOf(floatArrayOf(0f, 0f, cols * 4f, 300f * stepY), floatArrayOf(0f, 500f * stepY, cols * 4f, rows * stepY.toFloat()))
+        a.mask(boxes); b.mask(boxes)
+        assertEquals(-30 * stepY, ScrollTracker.estimate(a, b))
+    }
+
+    @Test
+    fun aFrameThatCannotBeMeasuredIsGuessedFromTheSpeedBefore() {
+        assertEquals(-60, ScrollTracker.predict(-1000f, 0.1f))
+        assertEquals(0, ScrollTracker.predict(-1000f, 0f))
+        assertEquals(-540, ScrollTracker.predict(-3000f, 5f))  // a long wait is capped
+        assertEquals(60, ScrollTracker.predict(1000f, 0.1f))
+    }
 }

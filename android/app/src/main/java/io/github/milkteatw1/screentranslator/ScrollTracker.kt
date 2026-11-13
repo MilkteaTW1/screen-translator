@@ -40,6 +40,7 @@ object ScrollTracker {
         }
     }
 
+    private const val MIN_SAMPLES = 400  // fewest samples that can tell a shift from chance
     private const val MIN_OVERLAP = 0.3  // share of the screen that must still be in both pictures to compare them
 
     /** Mean absolute brightness difference between [a] and [b] when [b] is [a] moved down by [dy] rows, over the rows
@@ -47,6 +48,7 @@ object ScrollTracker {
     fun difference(a: Grid, b: Grid, dy: Int, r0: Int = 0, r1: Int = a.rows, c0: Int = 0, c1: Int = a.cols): Double {
         var sum = 0L
         var n = 0
+        var usable = 0  // samples of [a] that are not painted out: only those can be compared
         val from = maxOf(r0, -dy, 0)
         val to = minOf(r1, a.rows, b.rows - dy)
         for (y in from until to) {
@@ -54,14 +56,19 @@ object ScrollTracker {
             val ib = (y + dy) * b.cols
             for (x in c0 until c1) {
                 val p = a.v[ia + x]
+                if (p >= 0) usable++
                 val q = b.v[ib + x]
                 if (p < 0 || q < 0) continue
                 sum += abs(p - q)
                 n++
             }
         }
+        // Our own boxes can paint out most of a busy screen; what is left is still a fair witness if it is enough
+        // samples and still a good share of what is left of the screen (judging against the whole screen made every
+        // scroll under big boxes look like "another page").
         val whole = (r1 - r0) * (c1 - c0)
-        return if (n < MIN_OVERLAP * whole) Double.MAX_VALUE else sum.toDouble() / n
+        val enough = n >= MIN_SAMPLES && n >= MIN_OVERLAP * minOf(whole, maxOf(usable, 1) * 2)
+        return if (!enough && n < MIN_OVERLAP * whole) Double.MAX_VALUE else sum.toDouble() / maxOf(n, 1)
     }
 
     /** How many pixels the content moved down between [prev] and [cur] (negative: up); 0 if it did not move;
@@ -93,6 +100,12 @@ object ScrollTracker {
         if (fineBest == Double.MAX_VALUE || fineBest > 0.4 * stillFine || fineBest > 40) return null  // not a clean shift
         return fine * prev.stepY
     }
+
+    /** A guess at the shift of a frame that could not be measured, for a page that was scrolling a moment ago:
+     *  the speed of the last measured shift (px/s, down positive) over the time since, slowed down a little because a
+     *  scroll that cannot be measured is usually one that is dying out. Better a box a few pixels off for one frame than
+     *  every box thrown away. */
+    fun predict(velocity: Float, seconds: Float): Int = (velocity * seconds.coerceIn(0f, 0.3f) * 0.6f).toInt()
 
     /** True if the picture inside rows [r0] until [r1] and columns [c0] until [c1] clearly stayed where it was while the
      *  rest moved by [dy] rows (a fixed header or toolbar). */

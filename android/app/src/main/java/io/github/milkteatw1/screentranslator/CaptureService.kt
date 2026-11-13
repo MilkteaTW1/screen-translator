@@ -154,6 +154,7 @@ class CaptureService : Service() {
     private var frame: Bitmap? = null  // the latest screen picture (reused), read again while nothing new arrives
     private var rereads = 0  // times the same picture was read again to confirm text
     private val rowBuffer = IntArray(4096)
+    private var lastSpeed = 0f  // speed of the last measured shift; unlike velocityY it is not reset between slow frames
     private var prevGrid: ScrollTracker.Grid? = null  // the previous picture, coarse, to measure a scroll against
     private var prevMask = listOf<FloatArray>()  // where our own boxes were drawn in it
     @Volatile private var cumShift = 0  // total vertical scroll followed so far: a late OCR result is moved by what the page did meanwhile
@@ -560,10 +561,17 @@ class CaptureService : Service() {
         val masks = ownRects() + prevMask
         val a = before.copy().apply { mask(masks) }
         val b = grid.copy().apply { mask(masks) }
-        val dy = ScrollTracker.estimate(a, b) ?: return null
+        val measured = ScrollTracker.estimate(a, b)
+        val now = SystemClock.uptimeMillis()
+        // A frame that cannot be measured in the middle of a scroll (a few pixels of a dying fling, a busy page) used
+        // to throw every translation away; the boxes are moved by the speed they had instead, and the screen is read
+        // again to put them exactly right.
+        val guessed = measured == null && lastFollowAt > 0 && now - lastFollowAt < 1200 && Math.abs(lastSpeed) > 50f
+        if (measured == null && !guessed) return null
+        val dy = measured ?: ScrollTracker.predict(lastSpeed, (now - lastFollowAt) / 1000f)
+        if (guessed) forceScan = true
         if (dy == 0) return 0
         val rowsMoved = dy / grid.stepY
-        val now = SystemClock.uptimeMillis()
         for (t in tracks) {
             val c0 = (t.rect.left / grid.stepX).toInt().coerceIn(0, grid.cols - 1)
             val c1 = (t.rect.right / grid.stepX).toInt().plus(1).coerceIn(c0 + 1, grid.cols)
@@ -579,9 +587,8 @@ class CaptureService : Service() {
         tracks = tracks.filter { it.rect.bottom > 0 && it.rect.top < height }
         cumShift += dy
         val dt = (now - lastFollowAt) / 1000f
-        velocityY = (if (dt > 0f && dt < 0.5f) 0.5f * velocityY + 0.5f * (dy / dt) else dy / 0.1f).coerceIn(-MAX_VELOCITY, MAX_VELOCITY)
-        lastFollowAt = now
-        scrollUntil = now + SCROLL_SETTLE_MS
+        if (!guessed) velocityY = (if (dt > 0f && dt < 0.5f) 0.5f * velocityY + 0.5f * (dy / dt) else dy / 0.1f).coerceIn(-MAX_VELOCITY, MAX_VELOCITY)
+        if (!guessed) { lastSpeed = velocityY; lastFollowAt = now; scrollUntil = now + SCROLL_SETTLE_MS }  // guesses must not keep a scroll alive
         publish()
         return dy
     }
@@ -772,11 +779,18 @@ class CaptureService : Service() {
 
     private fun applyOcr(result: com.google.mlkit.vision.text.Text, late: Float): Boolean {
         val joiner = if (src.script == Script.LATIN) " " else ""
-        val blocks = result.textBlocks.mapNotNull { b ->
-            val box = b.boundingBox ?: return@mapNotNull null
-            val text = b.lines.joinToString(joiner) { it.text }.trim()
-            Block(RectF(box).apply { offset(0f, late) }, text, box.height().toFloat() / maxOf(1, b.lines.size))
+        // ML Kit's own blocks glue a title to the link below it or to the picture beside it: the lines are put
+        // together here by their geometry instead, leaving out links and sloped text printed on pictures.
+        val lines = result.textBlocks.flatMap { it.lines }.mapNotNull { l ->
+            val box = l.boundingBox ?: return@mapNotNull null
+            val c = l.cornerPoints
+            val tilt = if (c != null && c.size >= 2) LineGrouper.tilt(c[0].x.toFloat(), c[0].y.toFloat(), c[1].x.toFloat(), c[1].y.toFloat()) else 0f
+            LineGrouper.Line(box.left.toFloat(), box.top.toFloat(), box.right.toFloat(), box.bottom.toFloat(), l.text, tilt)
+        }
+        val blocks = LineGrouper.group(lines, joiner).map { p ->
+            Block(RectF(p.left, p.top + late, p.right, p.bottom + late), p.text, p.lineHeight)
         }.filter { inRegion(it.rect) && TextRules.looksLikeSource(it.text, src, prefs.skipNames) && !isOwnOutput(it.text) }
+            .map { Block(it.rect, TextRules.expandAbbreviations(it.text), it.lineHeight) }
             .sortedWith(compareBy({ it.rect.top }, { it.rect.left }))
 
         // Follow each block from scan to scan: matches keep their translation and position,
@@ -810,7 +824,11 @@ class CaptureService : Service() {
         // top of each other, are one block drawn twice.
         val kept = ArrayList<Track>()
         for (t in carried) if ((fresh + kept).none { duplicate(t, it) }) kept += t
-        tracks = fresh + kept
+        // Two fresh blocks on top of each other are one thing read twice (our own box over the text, or two readings
+        // of the same words): the first, usually the better placed one, stays.
+        val distinct = ArrayList<Track>()
+        for (t in fresh) if (distinct.none { overlapShare(t.rect, it.rect) > 0.6f }) distinct += t
+        tracks = distinct + kept
         Log.d(TAG, "scan blocks=${blocks.size} tracks=${tracks.size} unconfirmed=${tracks.count { it.seen < 2 }}")
 
         for (t in tracks) cache[t.text]?.let {
@@ -995,6 +1013,14 @@ class CaptureService : Service() {
         val inter = ix * iy
         val union = a.width() * a.height() + b.width() * b.height() - inter
         return if (union > 0) inter / union else 0f
+    }
+
+    /** The share of the smaller box that lies inside the other. */
+    private fun overlapShare(a: RectF, b: RectF): Float {
+        val ix = maxOf(0f, minOf(a.right, b.right) - maxOf(a.left, b.left))
+        val iy = maxOf(0f, minOf(a.bottom, b.bottom) - maxOf(a.top, b.top))
+        val smaller = minOf(a.width() * a.height(), b.width() * b.height())
+        return if (smaller > 0f) ix * iy / smaller else 0f
     }
 
     private fun duplicate(a: Track, b: Track): Boolean {

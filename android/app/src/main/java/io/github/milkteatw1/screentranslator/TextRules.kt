@@ -21,6 +21,10 @@ object TextRules {
         return letters.length >= 5 && '_' !in text && letters.count { it.isUpperCase() } >= 0.9 * letters.length
     }
     private val spaces = Regex("""\s+""")
+    private val til = Regex("""^TIL\b[:,]?\s*""")
+
+    /** Reddit's "TIL ..." opens with an abbreviation the translator would carry over as a name and shuffle around. */
+    fun expandAbbreviations(text: String): String = til.replace(text.trim(), "Today I learned ")
     private const val NOISE_RATIO = 0.15
     private const val ALLOWED = "。、，．！？「」『』（）()・…ー〜~:：;；.,!?'\"’“”‘-—–/%&@#$+=[]<>"
     private const val EDGE_CHARS = ".,!?:;()\"'“”‘’-—…"
