@@ -80,6 +80,12 @@
     <string name="lang_en">English</string>
     <string name="start_translating">開始翻譯</string>
     <string name="version">版本 %1$s</string>
+    <string name="choose_version">選擇版本…</string>
+    <string name="choose_version_title">選擇版本</string>
+    <string name="version_newest">(最新)</string>
+    <string name="version_installed">(已安裝)</string>
+    <string name="no_versions">找不到可下載的版本</string>
+    <string name="downgrade_note">這個版本比目前安裝的舊。Android 可能不讓它覆蓋較新的版本;若失敗,請先解除安裝再安裝(設定會消失)。</string>
     <string name="check_updates_short">檢查更新</string>
     <string name="lang_short">中文</string>
     <string name="screen_start">開始螢幕翻譯</string>

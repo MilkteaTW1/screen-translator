@@ -309,6 +309,11 @@ class MainActivity : ComponentActivity() {
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)
                 .apply { topMargin = dp(12) }
         })
+        about.addView(Ui.pill(ctx, getString(R.string.choose_version), false).apply {
+            setOnClickListener { chooseVersion() }
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+                .apply { topMargin = dp(8) }
+        })
         pages[3].addView(about)
 
         // The start button and what is happening, always in reach at the bottom.
@@ -526,6 +531,39 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }.start()
+    }
+
+    /** Lists the recent releases (newest first, the newest marked); the one picked goes through the usual download and install. */
+    private fun chooseVersion() {
+        Thread {
+            val list = try { Updater.releases() } catch (e: Exception) {
+                runOnUiThread { status.text = getString(R.string.update_no_connection) }
+                return@Thread
+            }
+            runOnUiThread {
+                if (list.isEmpty()) { status.text = getString(R.string.no_versions); return@runOnUiThread }
+                val current = Updater.versionOf(this)
+                val names = list.mapIndexed { i, u ->
+                    u.version + (if (i == 0) " " + getString(R.string.version_newest) else "") + (if (u.version == current) " " + getString(R.string.version_installed) else "")
+                }.toTypedArray()
+                AlertDialog.Builder(this)
+                    .setTitle(R.string.choose_version_title)
+                    .setItems(names) { _, which -> offerVersion(list[which], current) }
+                    .setNegativeButton(R.string.later, null)
+                    .show()
+            }
+        }.start()
+    }
+
+    private fun offerVersion(update: Updater.Update, current: String) {
+        val mb = if (update.size > 0) " (${update.size / 1_000_000} MB)" else ""
+        val older = Updater.newer(current, update.version)
+        AlertDialog.Builder(this)
+            .setTitle(R.string.update_title)
+            .setMessage(getString(R.string.update_text, update.version, mb) + if (older) "\n\n" + getString(R.string.downgrade_note) else "")
+            .setPositiveButton(R.string.update) { _, _ -> downloadUpdate(update) }
+            .setNegativeButton(R.string.later, null)
+            .show()
     }
 
     private fun offerUpdate(update: Updater.Update) {
