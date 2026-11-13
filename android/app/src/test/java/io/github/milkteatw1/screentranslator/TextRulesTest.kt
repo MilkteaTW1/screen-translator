@@ -92,4 +92,11 @@ class TextRulesTest {
         for (label in listOf("Sign In", "Log Out", "Read More", "Contact Us"))
             assertEquals(label, emptyList<String>(), TextRules.protect(label, emptyList(), true).second)
     }
+
+    @Test
+    fun tilIsSpelledOutSoItIsNotCarriedOverAsAName() {
+        assertEquals("Today I learned Pixar did this", TextRules.expandAbbreviations("TIL Pixar did this"))
+        assertEquals("Today I learned the song was made", TextRules.expandAbbreviations("TIL: the song was made"))
+        assertEquals("Until later", TextRules.expandAbbreviations("Until later"))
+    }
 }
