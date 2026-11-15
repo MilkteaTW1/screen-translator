@@ -16,7 +16,7 @@ MODEL_DIR = data_dir() / "better" / "qwen2.5-1.5b"
 LANGUAGE_NAMES = {
     "en": "English", "zt": "Traditional Chinese (Taiwan)", "zh": "Simplified Chinese", "ja": "Japanese", "ko": "Korean",
     "fr": "French", "de": "German", "es": "Spanish", "ru": "Russian", "it": "Italian", "pt": "Portuguese", "th": "Thai",
-    "vi": "Vietnamese", "id": "Indonesian", "ar": "Arabic",
+    "vi": "Vietnamese", "id": "Indonesian","fa": "Persian" ,"ar": "Arabic",
 }
 
 _model = None
