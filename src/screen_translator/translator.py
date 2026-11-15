@@ -18,7 +18,7 @@ LANGUAGES = {
     "english": "en", "chinese (traditional)": "zh-TW", "chinese (simplified)": "zh-CN",
     "japanese": "ja", "korean": "ko", "french": "fr", "german": "de", "spanish": "es",
     "russian": "ru", "italian": "it", "portuguese": "pt", "thai": "th", "vietnamese": "vi",
-    "indonesian": "id", "arabic": "ar",
+    "indonesian": "id","persian": "fa" ,"arabic": "ar",
 }
 
 SCRIPT_RE = {
