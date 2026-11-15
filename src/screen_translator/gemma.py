@@ -19,7 +19,7 @@ LANGUAGES = {
     "es": ("Spanish", "es"), "ru": ("Russian", "ru"), "it": ("Italian", "it"), "pt": ("Portuguese", "pt"),
     "th": ("Thai", "th"), "vi": ("Vietnamese", "vi"), "id": ("Indonesian", "id"), "ar": ("Arabic", "ar"),
     "uk": ("Ukrainian", "uk"), "tr": ("Turkish", "tr"), "pl": ("Polish", "pl"), "nl": ("Dutch", "nl"),
-    "hi": ("Hindi", "hi"),
+    "hi": ("Hindi", "hi"),"fa": ("Persian", "fa")
 }
 
 _model = None
